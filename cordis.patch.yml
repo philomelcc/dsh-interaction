@@ -1,0 +1,13 @@
+# 交互增强：分支提问 + 跨会话消息
+#
+# crossSession.enabled: false 可以整块关掉跨会话工具（ask_flow 不受影响）。
+# crossSession.maxDepth: 跨会话链路最多转几层，防止两个会话无限互叫。
+# crossSession.rateLimit: 同一对会话 60 秒内最多发几条。
+- insert:
+    - id: interaction
+      name: '@local/dsh-interaction'
+      config:
+        crossSession:
+          enabled: true
+          maxDepth: 3
+          rateLimit: 3

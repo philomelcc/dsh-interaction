@@ -1,0 +1,47 @@
+{
+  "name": "@philomelcc/dsh-interaction",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DSH 交互增强：分支式提问（选 A 才问 A 的后续，支持跨波返回）+ 跨会话唤醒（向其它会话发消息并读取回复）。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "ask-user",
+    "question",
+    "cross-session",
+    "agent"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/philomelcc/dsh-interaction.git"
+  },
+  "homepage": "https://github.com/philomelcc/dsh-interaction#readme",
+  "bugs": {
+    "url": "https://github.com/philomelcc/dsh-interaction/issues"
+  },
+  "author": "philomelcc",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}
