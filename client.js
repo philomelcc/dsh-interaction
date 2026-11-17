@@ -2775,6 +2775,16 @@ window.__ModuleLoader__.load({
         padding: "6px 8px",
         fontSize: "12px",
       },
+      subRow: {
+        display: "flex",
+        gap: "8px",
+        alignItems: "center",
+        flexWrap: "wrap",
+        marginTop: "12px",
+        paddingTop: "12px",
+        borderTop: "1px solid " + C.border,
+      },
+      subLabel: { fontSize: "12px", color: C.sub },
       note: { fontSize: "12px", color: C.ok, minHeight: "18px", lineHeight: 1.6 },
       error: { fontSize: "12px", color: C.danger, minHeight: "18px", lineHeight: 1.6 },
     };
@@ -2894,50 +2904,48 @@ window.__ModuleLoader__.load({
           ),
           cards.map(function (card) {
             var on = settings[card.key] === true;
-            return h(
-              "div",
-              { key: card.key, style: S.card },
-              h("div", { style: S.title }, card.title),
-              h("div", { style: S.hint }, card.hint),
+            var children = [
+              h("div", { key: "title", style: S.title }, card.title),
+              h("div", { key: "hint", style: S.hint }, card.hint),
               h(
                 "div",
-                { style: S.row },
+                { key: "toggle", style: S.row },
                 h(
                   "button",
                   { type: "button", style: S.btn(on), onClick: function () { toggle(card.key) } },
                   on ? "已开启" : "已关闭"
                 )
-              )
-            );
+              ),
+            ];
+            // 功能内部需要的参数挂在它自己的卡片上，不另开一张卡片。
+            if (card.key === "crossSession") {
+              children.push(
+                h(
+                  "div",
+                  { key: "options", style: S.subRow },
+                  h("span", { style: S.subLabel }, "链路深度"),
+                  h("input", {
+                    type: "number",
+                    min: 1,
+                    max: 10,
+                    style: S.num,
+                    value: settings.crossSessionMaxDepth,
+                    onChange: function (event) { setNumber("crossSessionMaxDepth", event.target.value) },
+                  }),
+                  h("span", { style: S.subLabel }, "限频（条/分钟）"),
+                  h("input", {
+                    type: "number",
+                    min: 1,
+                    max: 60,
+                    style: S.num,
+                    value: settings.crossSessionRateLimit,
+                    onChange: function (event) { setNumber("crossSessionRateLimit", event.target.value) },
+                  })
+                )
+              );
+            }
+            return h("div", { key: card.key, style: S.card }, children);
           }),
-          h(
-            "div",
-            { style: S.card },
-            h("div", { style: S.title }, "跨会话护栏"),
-            h("div", { style: S.hint }, "链路深度：会话之间最多来回转几层；每秒限频：同一对会话 60 秒内最多发几条。"),
-            h(
-              "div",
-              { style: S.row },
-              h("span", { style: { fontSize: "12px", color: C.sub } }, "链路深度"),
-              h("input", {
-                type: "number",
-                min: 1,
-                max: 10,
-                style: S.num,
-                value: settings.crossSessionMaxDepth,
-                onChange: function (event) { setNumber("crossSessionMaxDepth", event.target.value) },
-              }),
-              h("span", { style: { fontSize: "12px", color: C.sub } }, "限频（条/分钟）"),
-              h("input", {
-                type: "number",
-                min: 1,
-                max: 60,
-                style: S.num,
-                value: settings.crossSessionRateLimit,
-                onChange: function (event) { setNumber("crossSessionRateLimit", event.target.value) },
-              })
-            )
-          ),
           h(
             "div",
             { style: S.row },
