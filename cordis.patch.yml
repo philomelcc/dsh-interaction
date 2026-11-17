@@ -5,7 +5,7 @@
 # crossSession.rateLimit: 同一对会话 60 秒内最多发几条。
 - insert:
     - id: interaction
-      name: '@local/dsh-interaction'
+      name: '@philomelcc/dsh-interaction'
       config:
         crossSession:
           enabled: true

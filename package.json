@@ -1,6 +1,6 @@
 {
   "name": "@philomelcc/dsh-interaction",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "DSH 交互增强：分支式提问（选 A 才问 A 的后续，支持跨波返回）+ 跨会话唤醒（向其它会话发消息并读取回复）。",
   "main": "index.js",
