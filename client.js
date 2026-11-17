@@ -2727,9 +2727,29 @@ window.__ModuleLoader__.load({
       borderStrong: "var(--dsw-alias-border-selected)",
       card: "var(--dsw-alias-settings-card-fill)",
       input: "var(--dsw-alias-bg-base)",
+      surface: "var(--dsw-alias-interactive-bg-hover)",
+      knob: "var(--dsw-alias-bg-base)",
       danger: "var(--dsw-alias-state-error-primary)",
       ok: "var(--dsw-alias-state-success-primary)",
     };
+
+    /**
+     * 设置页开关的样式。滑块必须用 ::after 画（内联 style 做不到伪元素），
+     * 所以注入一段 CSS；颜色全走 DSH 主题 token。
+     */
+    var SETTINGS_STYLE = [
+      ".di-switch-row{display:flex;align-items:center;gap:10px;padding:2px 0 8px}",
+      ".di-switch-label{flex:1 1 auto;min-width:0;font-size:13px;font-weight:600;line-height:1.45;color:var(--dsw-alias-label-primary)}",
+      ".di-switch-state{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-tertiary);transition:color .24s ease}",
+      ".di-switch-row.di-on .di-switch-state{color:var(--dsw-alias-label-primary)}",
+      ".di-switch{flex:0 0 auto;position:relative;width:44px;height:26px;border:0;padding:0;border-radius:999px;cursor:pointer;background:color-mix(in srgb,var(--dsw-alias-label-primary) 14%,var(--dsw-alias-bg-base));transition:background .26s ease,transform .12s ease}",
+      ".di-switch::after{content:\"\";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--dsw-alias-bg-base);box-shadow:0 1px 3px color-mix(in srgb,var(--dsw-alias-label-primary) 30%,transparent);transition:transform .3s cubic-bezier(.34,1.56,.64,1),background .26s ease}",
+      ".di-switch.di-on{background:var(--dsw-alias-brand-primary)}",
+      ".di-switch.di-on::after{transform:translateX(18px)}",
+      ".di-switch:active{transform:scale(.96)}",
+      ".di-switch:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);outline-offset:3px}",
+      "@media (prefers-reduced-motion:reduce){.di-switch,.di-switch::after,.di-switch-state{transition:none}}",
+    ].join("");
 
     var S = {
       page: { maxWidth: "860px", color: C.text },
@@ -2804,9 +2824,6 @@ window.__ModuleLoader__.load({
         var errorState = useState("");
         var error = errorState[0];
         var setError = errorState[1];
-        var busyState = useState(false);
-        var busy = busyState[0];
-        var setBusy = busyState[1];
 
         useEffect(function () {
           fetch(API + "/settings", { cache: "no-store" })
@@ -2822,49 +2839,53 @@ window.__ModuleLoader__.load({
             });
         }, []);
 
-        function toggle(key) {
-          setSettings(function (current) {
-            if (!current) return current;
-            var next = {};
-            for (var field in current) next[field] = current[field];
-            next[key] = !current[key];
-            return next;
-          });
-          setNote("");
-        }
-
-        function setNumber(key, value) {
-          setSettings(function (current) {
-            if (!current) return current;
-            var next = {};
-            for (var field in current) next[field] = current[field];
-            next[key] = Number(value) || 0;
-            return next;
-          });
-          setNote("");
-        }
-
-        async function save() {
-          if (!settings) return;
-          setBusy(true);
+        /** 把完整设置写回服务端。开关类改动立即调用，数字参数失焦时调用。 */
+        function persist(next) {
           setError("");
-          setNote("");
-          try {
-            var response = await fetch(API + "/settings", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify(settings),
+          fetch(API + "/settings", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(next),
+          })
+            .then(function (response) {
+              return response.json();
+            })
+            .then(function (data) {
+              if (!data || !data.ok) throw new Error((data && data.error) || "保存失败");
+              setSettings(data.settings);
+              setNote("已生效");
+            })
+            .catch(function (failure) {
+              setError(failure.message);
             });
-            var data = await response.json();
-            if (!data || !data.ok) throw new Error((data && data.error) || "保存失败");
-            setSettings(data.settings);
-            if (onSaved) onSaved(data.settings);
-            setNote("已保存。提问/跨会话开关立即对 AI 生效；文件支持开关立即切换，若预览没变化刷新一下页面。");
-          } catch (failure) {
-            setError(failure.message);
-          } finally {
-            setBusy(false);
-          }
+        }
+
+        /**
+         * 开关点一下立即生效。
+         * 设计规范里这类布尔开关就是「立即生效、不配保存按钮」的形态。
+         */
+        function toggle(key) {
+          if (!settings) return;
+          var next = {};
+          for (var field in settings) next[field] = settings[field];
+          next[key] = !settings[key];
+          setSettings(next);
+          // 文件支持是在浏览器里挂渲染器，不等服务端回包就当场切换。
+          if (key === "fileSupport" && onSaved) onSaved(next);
+          persist(next);
+        }
+
+        /** 数字参数先改本地，失焦时才落盘。 */
+        function setNumber(key, value) {
+          if (!settings) return;
+          var next = {};
+          for (var field in settings) next[field] = settings[field];
+          next[key] = Number(value) || 0;
+          setSettings(next);
+        }
+
+        function commitNumbers() {
+          if (settings) persist(settings);
         }
 
         if (!settings) {
@@ -2900,22 +2921,32 @@ window.__ModuleLoader__.load({
           h(
             "div",
             { style: S.lead },
-            "这里控制「交互增强」插件的三块能力。开关保存后，AI 侧的工具会立即注册/注销；文件支持是在浏览器里挂渲染器，保存后立即切换。"
+            "这里控制「交互增强」插件的三块能力。开关点一下立即生效：AI 侧的工具当场注册/注销，文件支持会立刻切换预览渲染器。"
           ),
           cards.map(function (card) {
             var on = settings[card.key] === true;
+            var labelId = "di-label-" + card.key;
             var children = [
-              h("div", { key: "title", style: S.title }, card.title),
-              h("div", { key: "hint", style: S.hint }, card.hint),
               h(
                 "div",
-                { key: "toggle", style: S.row },
+                { key: "row", className: "di-switch-row" + (on ? " di-on" : "") },
+                h("b", { key: "label", id: labelId, className: "di-switch-label" }, card.title),
                 h(
-                  "button",
-                  { type: "button", style: S.btn(on), onClick: function () { toggle(card.key) } },
+                  "span",
+                  { key: "state", className: "di-switch-state", "aria-hidden": "true" },
                   on ? "已开启" : "已关闭"
-                )
+                ),
+                h("button", {
+                  key: "sw",
+                  type: "button",
+                  className: "di-switch" + (on ? " di-on" : ""),
+                  role: "switch",
+                  "aria-checked": on ? "true" : "false",
+                  "aria-labelledby": labelId,
+                  onClick: function () { toggle(card.key) },
+                })
               ),
+              h("div", { key: "hint", style: S.hint }, card.hint),
             ];
             // 功能内部需要的参数挂在它自己的卡片上，不另开一张卡片。
             if (card.key === "crossSession") {
@@ -2931,6 +2962,7 @@ window.__ModuleLoader__.load({
                     style: S.num,
                     value: settings.crossSessionMaxDepth,
                     onChange: function (event) { setNumber("crossSessionMaxDepth", event.target.value) },
+                    onBlur: commitNumbers,
                   }),
                   h("span", { style: S.subLabel }, "限频（条/分钟）"),
                   h("input", {
@@ -2940,21 +2972,13 @@ window.__ModuleLoader__.load({
                     style: S.num,
                     value: settings.crossSessionRateLimit,
                     onChange: function (event) { setNumber("crossSessionRateLimit", event.target.value) },
+                    onBlur: commitNumbers,
                   })
                 )
               );
             }
             return h("div", { key: card.key, style: S.card }, children);
           }),
-          h(
-            "div",
-            { style: S.row },
-            h(
-              "button",
-              { type: "button", style: S.primary, disabled: busy, onClick: save },
-              busy ? "保存中……" : "保存"
-            )
-          ),
           h("div", { style: S.note }, note),
           h("div", { style: S.error }, error)
         );
@@ -2971,6 +2995,17 @@ window.__ModuleLoader__.load({
      * 加载顺序不保证，所以 mountFileSupport 里先直接取，取不到再注入等待。
      */
     function apply(ctx) {
+      // 设置页开关的样式（滑块是 ::after，必须走 CSS，内联 style 做不到）。
+      var settingsStyle = document.createElement("style");
+      settingsStyle.dataset.plugin = "dsh-interaction-settings";
+      settingsStyle.textContent = SETTINGS_STYLE;
+      (document.head || document.documentElement).appendChild(settingsStyle);
+      ctx.effect(function () {
+        return function () {
+          settingsStyle.remove();
+        };
+      }, "interaction: settings styles");
+
       var fileSupportOn = true;
       var mounted = null;
 
