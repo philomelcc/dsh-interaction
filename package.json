@@ -1,15 +1,17 @@
 {
   "name": "@philomelcc/dsh-interaction",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
-  "description": "DSH 交互增强：分支式提问（选 A 才问 A 的后续，支持跨波返回）+ 跨会话唤醒（向其它会话发消息并读取回复）。",
+  "description": "DSH 交互增强：分支式提问 + 跨会话唤醒 + 文件支持扩展（音频/图片预览），三块能力都能在设置里单独开关。",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "client.js",
     "lib",
     "cordis.patch.yml",
     "README.md",
@@ -23,11 +25,22 @@
     "ask-user",
     "question",
     "cross-session",
-    "agent"
+    "agent",
+    "document-preview",
+    "audio",
+    "image"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"
+      ]
     }
   },
   "repository": {

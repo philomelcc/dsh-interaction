@@ -4,9 +4,14 @@
  */
 
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
-import { apply, normalizeConfig } from '../index.js'
+// 设置文件隔离到临时目录，别读写真实配置。
+process.env.DSH_INTERACTION_DATA_DIR = mkdtempSync(join(tmpdir(), 'dsh-interaction-test-'))
+const { apply, normalizeConfig, normalizeSettings } = await import('../index.js')
 
 function fakeCtx({ userQuestions, sessionController, sessionTitle } = {}) {
   const services = { userQuestions, sessionController, sessionTitle }
@@ -85,9 +90,9 @@ const SAMPLE_ITEMS = [
   },
 ]
 
-test('注册了四个工具（跨会话默认开启）', () => {
+test('注册了四个工具（跨会话默认开启）', async () => {
   const ctx = fakeCtx()
-  apply(ctx, {})
+  await apply(ctx, {})
   assert.deepEqual(ctx.registered.map((tool) => tool.name).sort(), [
     'ask_flow', 'session_list', 'session_peek', 'session_send',
   ])
@@ -115,18 +120,18 @@ function badRequiredNodes(node, path = '$', found = []) {
   return found
 }
 
-test('所有工具的 schema 里 required 必须是父对象的字符串数组（嵌套也不能漏）', () => {
+test('所有工具的 schema 里 required 必须是父对象的字符串数组（嵌套也不能漏）', async () => {
   const ctx = fakeCtx()
-  apply(ctx, {})
+  await apply(ctx, {})
   for (const tool of ctx.registered) {
     assert.deepEqual(badRequiredNodes(tool.parameters), [], `${tool.name} 的参数 schema 不合法`)
     assert.deepEqual(badRequiredNodes(tool.output.schema), [], `${tool.name} 的输出 schema 不合法`)
   }
 })
 
-test('ask_flow 的嵌套 items 把 required 提升到了数组', () => {
+test('ask_flow 的嵌套 items 把 required 提升到了数组', async () => {
   const ctx = fakeCtx()
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'ask_flow')
   const steps = tool.parameters.properties.steps
   assert.deepEqual(steps.items.required, ['id', 'question'])
@@ -135,13 +140,13 @@ test('ask_flow 的嵌套 items 把 required 提升到了数组', () => {
   assert.equal(steps.items.properties.options.items.properties.label.required, undefined)
 })
 
-test('crossSession.enabled=false 时只注册 ask_flow', () => {
+test('crossSession.enabled=false 时只注册 ask_flow', async () => {
   const ctx = fakeCtx()
-  apply(ctx, { crossSession: { enabled: false } })
+  await apply(ctx, { crossSession: { enabled: false } })
   assert.deepEqual(ctx.registered.map((tool) => tool.name), ['ask_flow'])
 })
 
-test('配置容错：乱写的值回落到默认', () => {
+test('配置容错：乱写的值回落到默认', async () => {
   const config = normalizeConfig({ crossSession: { maxDepth: 'abc', rateLimit: null, enabled: 1 } })
   assert.equal(config.crossSession.maxDepth, 3)
   assert.equal(config.crossSession.rateLimit, 3)
@@ -162,7 +167,7 @@ test('ask_flow 走官方 ask 并返回摘要', async () => {
     },
   }
   const ctx = fakeCtx({ userQuestions })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'ask_flow')
 
   const result = await tool.execute({
@@ -188,7 +193,7 @@ test('ask_flow 走官方 ask 并返回摘要', async () => {
 
 test('ask_flow 在无关面板时给出明确报错', async () => {
   const ctx = fakeCtx({})
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'ask_flow')
   await assert.rejects(
     () => tool.execute({ steps: [{ id: 'a', question: 'A?' }] }, {}),
@@ -203,7 +208,7 @@ test('session_list 过滤子代理和空会话，按时间排序', async () => {
     },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_list')
   const result = await tool.execute({}, { agent: fakeAgent() })
   assert.deepEqual(result.sessions.map((row) => row.sessionId), ['session-video', 'session-idea'])
@@ -214,7 +219,7 @@ test('session_list 过滤子代理和空会话，按时间排序', async () => {
 test('session_list 支持关键词过滤', async () => {
   const sessionController = { async list() { return { items: SAMPLE_ITEMS } } }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_list')
   const result = await tool.execute({ query: '灵感' }, { agent: fakeAgent() })
   assert.deepEqual(result.sessions.map((row) => row.sessionId), ['session-idea'])
@@ -234,7 +239,7 @@ test('session_send 用 followup 投递，source 不是 user（客户端会渲染
     },
   }
   const ctx = fakeCtx({ sessionController, sessionTitle: { get: () => ({ title: '交互增强' }) } })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_send')
 
   const result = await tool.execute(
@@ -271,7 +276,7 @@ test('mode=steer 走 agent.steer', async () => {
     },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_send')
   await tool.execute({ session_id: 'session-video', text: '插队一下', mode: 'steer' }, { agent: fakeAgent() })
   assert.equal(delivered[0].channel, 'steer')
@@ -283,7 +288,7 @@ test('session_send 拒绝发给自己、空文本和不存在的会话', async (
     async prompt() { return { accepted: true } },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_send')
   const agent = fakeAgent()
 
@@ -298,7 +303,7 @@ test('跨会话链路超过 maxDepth 就拒绝', async () => {
     async prompt() { return { accepted: true } },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_send')
 
   // 历史里最后一条是深度 3 的跨会话消息 → 再发就是第 4 层，超过上限 3。
@@ -321,7 +326,7 @@ test('同一对会话 60 秒内最多发 rateLimit 条', async () => {
       },
     }
     const ctx = fakeCtx({ sessionController })
-    apply(ctx, { crossSession: { rateLimit: 2 } })
+    await apply(ctx, { crossSession: { rateLimit: 2 } })
     const tool = toolByName(ctx, 'session_send')
     const agent = fakeAgent()
 
@@ -356,7 +361,7 @@ test('session_peek 抽出用户和助手的文本', async () => {
     },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_peek')
   const result = await tool.execute({ session_id: 'session-video' }, { agent: fakeAgent() })
   assert.deepEqual(result.messages.map((message) => message.role), ['用户', '助手'])
@@ -398,10 +403,52 @@ test('session_peek 过滤系统注入的 runtime-context 快照', async () => {
     },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_peek')
   const result = await tool.execute({ session_id: 'session-video' }, { agent: fakeAgent() })
   assert.deepEqual(result.messages.map((message) => message.text), ['真的用户消息', '收到'])
+})
+
+test('normalizeSettings 对乱写的值回落', async () => {
+  const settings = normalizeSettings({
+    askFlow: 'x',
+    crossSession: false,
+    fileSupport: true,
+    crossSessionMaxDepth: 99,
+    crossSessionRateLimit: 'abc',
+  })
+  assert.equal(settings.askFlow, true)
+  assert.equal(settings.crossSession, false)
+  assert.equal(settings.fileSupport, true)
+  assert.equal(settings.crossSessionMaxDepth, 10)
+  assert.equal(settings.crossSessionRateLimit, 3)
+})
+
+test('设置文件里的开关决定注册哪些工具', async () => {
+  const file = join(process.env.DSH_INTERACTION_DATA_DIR, 'settings.json')
+  writeFileSync(file, JSON.stringify({ askFlow: false, crossSession: true, fileSupport: true }), 'utf8')
+  try {
+    const ctx = fakeCtx()
+    await apply(ctx, {})
+    assert.deepEqual(
+      ctx.registered.map((tool) => tool.name).sort(),
+      ['session_list', 'session_peek', 'session_send'],
+    )
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
+test('两个开关都关掉时一个工具都不注册', async () => {
+  const file = join(process.env.DSH_INTERACTION_DATA_DIR, 'settings.json')
+  writeFileSync(file, JSON.stringify({ askFlow: false, crossSession: false, fileSupport: true }), 'utf8')
+  try {
+    const ctx = fakeCtx()
+    await apply(ctx, {})
+    assert.deepEqual(ctx.registered.map((tool) => tool.name), [])
+  } finally {
+    rmSync(file, { force: true })
+  }
 })
 
 test('session_peek 把跨会话消息标成「跨会话」而不是过滤掉', async () => {
@@ -427,7 +474,7 @@ test('session_peek 把跨会话消息标成「跨会话」而不是过滤掉', a
     },
   }
   const ctx = fakeCtx({ sessionController })
-  apply(ctx, {})
+  await apply(ctx, {})
   const tool = toolByName(ctx, 'session_peek')
   const result = await tool.execute({ session_id: 'session-video' }, { agent: fakeAgent() })
   assert.deepEqual(result.messages.map((message) => message.role), ['跨会话', '助手'])

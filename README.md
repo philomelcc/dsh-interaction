@@ -1,9 +1,19 @@
 # dsh-interaction · 交互增强
 
-两块能力，一个插件：
+三块能力，一个插件，每块都能在「设置 → 交互增强」里单独开关：
 
 1. **分支式提问**（`ask_flow`）—— 声明一张问题图，按依赖分波提问。选了 A 就只问 A 那条线，选了 B 就问 B 那条线。
 2. **跨会话消息**（`session_list` / `session_send` / `session_peek`）—— 主动向另一个会话发消息并唤醒它，发完还能回读对方回复。
+3. **文件支持扩展** —— 右侧边栏文档预览：音频波形 + 播放器、图片滚轮缩放 + 顺逆时针旋转、原图预览增强。
+
+## 设置页
+
+设置 → **交互增强**，三张卡片对应上面三块能力，外加跨会话的两条护栏（链路深度 / 每分钟限频）。
+
+- 提问、跨会话开关保存后**立即对 AI 生效**（工具会注销/重注册，不需要重启）。
+- 文件支持开关保存后**立即切换**最近的预览行为；如果界面没变化，刷新一次页面。
+
+设置存在 `~/.dsh/interaction/settings.json`。
 
 ## 安装
 
@@ -20,6 +30,7 @@ dsh plugin --profile web add ./dsh-interaction
 
 装完需要重启一次宿主（加载 Host 半），之后改代码可以用
 `plugin_manager set_plugin target=include:interaction enabled=false/true` 热重载。
+改了 `dsh.client` 声明或新增/删除 client.js 时，需要 `remove_bundle` + `install_bundle` 重建客户端 bundle。
 
 > 依赖的服务：`ctx.userQuestions`（提问链路）和 `ctx.sessionController`（跨会话）都是
 > web / desktop 装配层才有的能力；纯 CLI profile 里跨会话工具会给出明确报错。
@@ -72,7 +83,7 @@ dsh plugin --profile web add ./dsh-interaction
   - `mode: 'queue'`（默认）走 `followup`（下一轮）；`mode: 'steer'` 走 `steer`（插进当前回合）。
 - `session_peek`：只读目标会话最近几条消息，会过滤掉 runtime-context / time-context 这类系统注入噪声，跨会话消息标成「跨会话」角色。
 
-投递的消息带来源标记，目标会话里看到的是：
+投递的消息带来源标记，在目标会话里显示成一张可折叠的通知卡片（默认标题「收到执行请求」），点开是这段文本：
 
 ```
 【跨会话消息 #depth=1 from=session-ab12cd34】
@@ -82,6 +93,17 @@ dsh plugin --profile web add ./dsh-interaction
 （正文）
 ```
 
+## 文件支持扩展
+
+从 `dsh-file-support` 合并进来的浏览器半侧，接的是 `dsh-client-ui-sidebar-documentpreview` 的两个扩展点：
+
+- **音频**：右侧边栏打开 mp3 / wav / flac / ogg / m4a / aac / aiff / wma 等，显示波形 + 播放器（变速、跳转、时间轴）。
+- **图片**：滚轮缩放（以光标为中心）、拖动平移、顺/逆时针 90° 旋转、适应窗口、1:1 像素。
+- **原图预览增强**：点开会话里的图片时，遮罩层也支持缩放/旋转。
+- **草稿附件保持**：切换会话时草稿里已附的文件不丢。
+
+关掉这个开关时这些渲染器会被卸载，右侧预览回到 DSH 自带行为。
+
 ## 护栏
 
 | 闸门 | 默认值 | 说明 |
@@ -89,16 +111,17 @@ dsh plugin --profile web add ./dsh-interaction
 | 链路深度 | 3 | 目标会话再往外发会 +1，超过就拒绝，防两个会话无限互叫 |
 | 限频 | 3 条 / 60 秒 / 每对会话 | 防止刷屏和烧 token |
 | 允许跨工作区 | 是 | 用户 2026-11-17 拍板放开，不再限制同 cwd |
-| 整块开关 | 开 | `crossSession.enabled: false` 只关跨会话，`ask_flow` 不受影响 |
+| 整块开关 | 开 | 设置页里对应卡片关掉即可；配置文件里的值是首次安装时的默认值 |
 
 ## 配置
 
-`cordis.patch.yml`：
+运行时的开关以设置页为准，存在 `~/.dsh/interaction/settings.json`，按 profile 共用。
+`cordis.patch.yml` 里的 `config.crossSession` 只作为**首次安装的默认值**（设置文件存在后以文件为准）：
 
 ```yaml
 - insert:
     - id: interaction
-      name: '@local/dsh-interaction'
+      name: '@philomelcc/dsh-interaction'
       config:
         crossSession:
           enabled: true
@@ -121,4 +144,5 @@ node --test test/flow.test.mjs test/interaction.test.mjs
 - legacy 阻塞提问不写进 session projection，聊天记录回看只见工具结果，不见中间卡片。
 - 跨会话会真的让目标会话跑一轮，消耗 token；目标会话正在跑时 queue 模式可能要排队。
 - 跨会话只支持纯文本。
+- 文件支持开关切换后，已经打开的预览面板可能需要重新打开（或刷新页面）才会换成新渲染器。
 - 「收到执行请求」这个卡片标题来自官方 locale 的默认分支，插件无法自定义文案。
