@@ -2993,8 +2993,10 @@ window.__ModuleLoader__.load({
      * 局限：只能改 color / background-color / text-decoration，做不了圆角和内边距。
      */
     var PATH_STYLE = [
-      "::highlight(di-path){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,var(--dsw-alias-bg-layer-1));text-decoration:underline dotted color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);text-underline-offset:2px}",
-      "::highlight(di-path-hover){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 32%,var(--dsw-alias-bg-layer-1));text-decoration:underline solid color-mix(in srgb,var(--dsw-alias-brand-primary) 70%,transparent)}",
+      // 常态：用主题的交互底色（和行内 code 一个观感）＋虚线下划线。
+      "::highlight(di-path){background-color:var(--dsw-alias-interactive-bg-hover);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 60%,transparent);text-underline-offset:2px}",
+      // 悬停：底色往品牌色偏、文字变品牌色、下划线变实线。
+      "::highlight(di-path-hover){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 20%,var(--dsw-alias-interactive-bg-hover));color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
     ].join("");
 
     /**
