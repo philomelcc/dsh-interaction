@@ -115,8 +115,9 @@ dsh plugin --profile web add ./dsh-interaction
 - 路径带主题色浅底 + 下划线（跟随浅色/深色主题，不写死颜色）；悬停时底色加深、文字与下划线变成品牌色
 - 输入框、代码块里不生效；路径不存在时静默忽略（Host 会先检查存在性，不会弹系统错误框）
 
-视觉用 CSS Custom Highlight API（`::highlight`）按文本范围上色，**不往 React 管的 DOM 里插节点**，
-所以会话重渲染、流式追加都不会打架；DOM 变化后 300ms 防抖重扫一遍范围。
+视觉上包一层 `<span class="di-path">`，直接复刻行内 code 的样式：同一个背景 token
+`--dsw-alias-markdown-inline-code`、圆角 8px、内边距 0 5px，所以跟 `code` 长得一样。
+React 重渲染把 span 冲掉后会重新包（400ms 防抖，已包的跳过）。
 
 实现走 DSH 现成的 `sessionController.openWorkspacePath`：`action: 'reveal'` 交给文件管理器定位，
 省略 action 则用操作系统默认关联打开。

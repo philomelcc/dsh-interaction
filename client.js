@@ -2988,35 +2988,30 @@ window.__ModuleLoader__.load({
     /**
      * 路径标记的样式。
      *
-     * 用 CSS Custom Highlight API 给文本范围上底色（`::highlight` 只作用在文本上），
-     * 这样不用往 React 管的 DOM 里插节点，重渲染也不会打架。
-     * 局限：只能改 color / background-color / text-decoration，做不了圆角和内边距。
+     * 直接复刻 DSH 行内 code 的观感：同一个背景 token（`--dsw-alias-markdown-inline-code`）、
+     * 同样的圆角与内边距，所以浅色/深色主题下都跟 `code` 一致；
+     * 悬停时底色往品牌色偏、文字和下划线变品牌色。
      */
     var PATH_STYLE = [
-      // 常态：用主题的交互底色（和行内 code 一个观感）＋虚线下划线。
-      "::highlight(di-path){background-color:var(--dsw-alias-interactive-bg-hover);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 60%,transparent);text-underline-offset:2px}",
-      // 悬停：底色往品牌色偏、文字变品牌色、下划线变实线。
-      "::highlight(di-path-hover){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 20%,var(--dsw-alias-interactive-bg-hover));color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
+      ".di-path{background:var(--dsw-alias-markdown-inline-code);border-radius:8px;padding:0 5px;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);text-underline-offset:2px;cursor:pointer;transition:background .15s ease,color .15s ease,text-decoration-color .15s ease}",
+      ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
     ].join("");
 
     /**
      * 会话里出现的本地文件路径：左键用系统程序打开，右键弹「打开所在目录 / 打开文件 / 复制路径」。
      *
-     * 两套机制分工：
-     *  - 视觉（底色 / 悬停加深）：CSS Custom Highlight API 按文本范围上色，完全不改 DOM；
-     *  - 命中（点击 / 右键）：caretRangeFromPoint 取点击处文本节点，正则定位路径 token。
-     *
+     * 视觉上包一层 `<span class="di-path">`，样式直接复刻 DSH 行内 code
+     * （同一个背景 token、圆角、内边距），所以跟 `code` 长一个样；点击/右键命中这个 span。
+     * React 重渲染会把 span 冲掉，所以 DOM 一变就重扫重包（防抖，已包的跳过）。
      * 路径是否存在由 Host 侧的 openWorkspacePath 校验，点不存在的路径只会静默失败。
      */
     function installPathActions() {
       var cleanups = [];
       var menuEl = null;
-      var lastMoveAt = 0;
       var scanTimer = null;
       var observer = null;
       /** Windows 盘符路径或 UNC 路径；尾部去掉标点，避免把句号逗号吃进去。 */
       var PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|?*\r\n]*[^\s"'`<>|?*:.,;!?，。；：！？\r\n]/g;
-      var HIGHLIGHT_OK = typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight === "function";
 
       function listen(target, type, handler, options) {
         target.addEventListener(type, handler, options);
@@ -3025,7 +3020,7 @@ window.__ModuleLoader__.load({
         });
       }
 
-      // 路径底色 / 悬停样式的 <style>。
+      // 路径 chip 的样式。
       var styleEl = document.createElement("style");
       styleEl.dataset.plugin = "dsh-interaction-paths";
       styleEl.textContent = PATH_STYLE;
@@ -3034,17 +3029,12 @@ window.__ModuleLoader__.load({
         styleEl.remove();
       });
 
-      /** 这些区域里的文本不参与：输入框、代码块、我们自己的 UI。 */
+      /** 这些区域里的文本不参与：输入框、代码块、已经包过的 chip、我们自己的 UI。 */
       var SKIP_SELECTOR =
-        'pre, code, textarea, input, [contenteditable="true"], .di-settings, .dfs-img-root, .di-path-menu, script, style';
+        'pre, code, textarea, input, [contenteditable="true"], .di-settings, .dfs-img-root, .di-path, .di-path-menu, script, style';
 
-      /**
-       * 扫一遍全文，把命中的路径范围注册成 highlight。
-       * React 重渲染后文本节点会换，所以 DOM 一变就重扫（300ms 防抖）。
-       */
-      function scanPaths() {
-        if (!HIGHLIGHT_OK) return;
-        var ranges = [];
+      /** 把全文里还没包过的路径包成 .di-path chip。 */
+      function wrapPaths() {
         var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
           acceptNode: function (node) {
             var parent = node.parentElement;
@@ -3052,73 +3042,47 @@ window.__ModuleLoader__.load({
             return NodeFilter.FILTER_ACCEPT;
           },
         });
+        var nodes = [];
         var node;
-        while ((node = walker.nextNode())) {
-          var text = node.nodeValue || "";
-          // 快速排除：没有路径分隔符的文本不用跑正则。
-          if (text.indexOf("\\") < 0) continue;
-          PATH_RE.lastIndex = 0;
-          var match;
-          while ((match = PATH_RE.exec(text)) !== null) {
-            var range = document.createRange();
-            range.setStart(node, match.index);
-            range.setEnd(node, match.index + match[0].length);
-            ranges.push(range);
-          }
-        }
-        if (ranges.length === 0) {
-          CSS.highlights.delete("di-path");
-          return;
-        }
-        CSS.highlights.set("di-path", new Highlight(...ranges));
+        while ((node = walker.nextNode())) nodes.push(node);
+        for (var index = 0; index < nodes.length; index += 1) wrapOne(nodes[index]);
       }
 
-      /** 取屏幕坐标处的文本节点与偏移（Chromium / 新版 Firefox 都支持）。 */
-      function pointAt(x, y) {
-        var range = null;
-        if (document.caretRangeFromPoint) {
-          range = document.caretRangeFromPoint(x, y);
-        } else if (document.caretPositionFromPoint) {
-          var position = document.caretPositionFromPoint(x, y);
-          if (position) {
-            range = document.createRange();
-            range.setStart(position.offsetNode, position.offset);
-            range.collapse(true);
-          }
-        }
-        if (!range || range.startContainer.nodeType !== 3) return null;
-        return { node: range.startContainer, offset: range.startOffset };
-      }
-
-      /** 点击位置命中的路径 token 及其文本范围。 */
-      function pathRangeAtPoint(x, y) {
-        var point = pointAt(x, y);
-        if (!point) return null;
-        var parent = point.node.parentElement;
-        if (!parent || parent.closest(SKIP_SELECTOR)) return null;
-        var text = point.node.textContent || "";
+      /** 单个文本节点里的所有路径：从后往前切，前面的字符索引不受影响。 */
+      function wrapOne(textNode) {
+        if (!textNode.isConnected) return;
+        var text = textNode.nodeValue || "";
+        if (text.indexOf("\\") < 0) return;
+        var matches = [];
         PATH_RE.lastIndex = 0;
         var match;
         while ((match = PATH_RE.exec(text)) !== null) {
-          if (point.offset >= match.index && point.offset <= match.index + match[0].length) {
-            var range = document.createRange();
-            range.setStart(point.node, match.index);
-            range.setEnd(point.node, match.index + match[0].length);
-            return { path: match[0], range: range };
-          }
-          if (match.index > point.offset) break;
+          matches.push({ index: match.index, value: match[0] });
         }
-        return null;
+        for (var i = matches.length - 1; i >= 0; i -= 1) {
+          var item = matches[i];
+          try {
+            var before = textNode.splitText(item.index);
+            before.splitText(item.value.length);
+            var span = document.createElement("span");
+            span.className = "di-path";
+            span.setAttribute("data-path", item.value);
+            span.textContent = item.value;
+            before.parentNode.replaceChild(span, before);
+          } catch (error) {
+            /* 切分失败就跳过这一段，不影响其它路径 */
+          }
+        }
       }
 
-      /** 悬停反馈：命中的路径范围单独用一个更深的 highlight。 */
-      function updateHover(hit) {
-        if (!HIGHLIGHT_OK) return;
-        if (!hit) {
-          CSS.highlights.delete("di-path-hover");
-          return;
+      /** 卸载时把 chip 还原成纯文本，别让 DOM 结构留在页面上。 */
+      function unwrapPaths() {
+        var spans = document.querySelectorAll(".di-path");
+        for (var index = 0; index < spans.length; index += 1) {
+          var span = spans[index];
+          if (!span.parentNode) continue;
+          span.parentNode.replaceChild(document.createTextNode(span.textContent || ""), span);
         }
-        CSS.highlights.set("di-path-hover", new Highlight(hit.range));
       }
 
       function callHost(path, action) {
@@ -3182,6 +3146,14 @@ window.__ModuleLoader__.load({
         menuEl = menu;
       }
 
+      /** 事件目标是否命中路径 chip。 */
+      function pathFromEvent(event) {
+        var target = event.target;
+        if (!target || typeof target.closest !== "function") return null;
+        var span = target.closest(".di-path");
+        return span ? span.getAttribute("data-path") : null;
+      }
+
       // 左键单击路径：系统默认程序打开。有选区说明在选文字，不触发。
       listen(document, "click", function (event) {
         if (event.button !== 0 || event.defaultPrevented) return;
@@ -3191,35 +3163,24 @@ window.__ModuleLoader__.load({
         }
         var selection = window.getSelection();
         if (selection && !selection.isCollapsed) return;
-        var hit = pathRangeAtPoint(event.clientX, event.clientY);
-        if (!hit) return;
+        var path = pathFromEvent(event);
+        if (!path) return;
         event.preventDefault();
         event.stopPropagation();
-        callHost(hit.path, "open");
+        callHost(path, "open");
       }, true);
 
       // 右键路径：我们的菜单替换系统菜单（路径上才有）。
       listen(document, "contextmenu", function (event) {
-        var hit = pathRangeAtPoint(event.clientX, event.clientY);
-        if (!hit) {
+        var path = pathFromEvent(event);
+        if (!path) {
           closeMenu();
           return;
         }
         event.preventDefault();
         event.stopPropagation();
-        showMenu(event.clientX, event.clientY, hit.path);
+        showMenu(event.clientX, event.clientY, path);
       }, true);
-
-      // 悬停：pointer 光标 + 底色加深（节流，别每帧都在算 caret）。
-      listen(document, "mousemove", function (event) {
-        var now = Date.now();
-        if (now - lastMoveAt < 120) return;
-        lastMoveAt = now;
-        if (menuEl) return;
-        var hit = pathRangeAtPoint(event.clientX, event.clientY);
-        document.body.style.cursor = hit ? "pointer" : "";
-        updateHover(hit);
-      }, { passive: true });
 
       // 点别处关菜单。
       listen(window, "blur", closeMenu);
@@ -3228,14 +3189,14 @@ window.__ModuleLoader__.load({
       });
 
       // 首扫 + DOM 变化后重扫（会话切换、流式追加都会触发）。
-      scanPaths();
+      wrapPaths();
       if (typeof MutationObserver === "function") {
         observer = new MutationObserver(function () {
           if (scanTimer !== null) return;
           scanTimer = window.setTimeout(function () {
             scanTimer = null;
-            scanPaths();
-          }, 300);
+            wrapPaths();
+          }, 400);
         });
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
       }
@@ -3250,10 +3211,7 @@ window.__ModuleLoader__.load({
           window.clearTimeout(scanTimer);
           scanTimer = null;
         }
-        if (HIGHLIGHT_OK) {
-          CSS.highlights.delete("di-path");
-          CSS.highlights.delete("di-path-hover");
-        }
+        unwrapPaths();
         for (var index = 0; index < cleanups.length; index += 1) {
           try {
             cleanups[index]();
