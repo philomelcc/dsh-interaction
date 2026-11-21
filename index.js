@@ -10,7 +10,7 @@
  * 开关改动后工具会立即注销/重注册，agent 下一个请求就能看到。
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -431,6 +431,29 @@ export async function apply(ctx, rawConfig = {}) {
             sessionController: ctx.get('sessionController') !== undefined,
           },
         })
+      }
+      // 会话里点文件路径：open 用系统默认程序打开，reveal 在文件管理器里定位。
+      if (req.method === 'POST' && (route === '/open' || route === '/reveal')) {
+        const body = await readBody(req)
+        const targetPath = String(body.path || '').trim()
+        if (!targetPath) throw new Error('path 不能为空')
+        // openWorkspacePath 只验证「映射到 host 文件系统」，不验证存在性；
+        // 点不存在的路径会弹系统错误框，所以这里先自己检查一次。
+        try {
+          await access(targetPath)
+        } catch {
+          throw new Error(`路径不存在：${targetPath}`)
+        }
+        const service = ctx.get('sessionController')
+        if (service === undefined || typeof service.openWorkspacePath !== 'function') {
+          throw new Error('当前部署没有 sessionController，打不开本地文件')
+        }
+        const abort = new AbortController()
+        await service.openWorkspacePath(
+          route === '/reveal' ? { path: targetPath, action: 'reveal' } : { path: targetPath },
+          abort.signal,
+        )
+        return json(res, 200, { ok: true, opened: true })
       }
       return json(res, 404, { ok: false, error: 'not found' })
     } catch (error) {

@@ -106,6 +106,18 @@ dsh plugin --profile web add ./dsh-interaction
 
 关掉这个开关时这些渲染器会被卸载，右侧预览回到 DSH 自带行为。
 
+## 文件路径点击
+
+会话里出现的本地文件路径（Windows 盘符路径 `C:\...`，或 UNC 路径 `\\server\share\...`）可以直接操作：
+
+- **左键点击** → 用系统默认程序打开该文件
+- **右键点击** → 菜单：打开所在目录 / 打开文件 / 复制路径
+- 悬停时鼠标变成 pointer 提示可点
+- 输入框、代码块里不生效；路径不存在时静默忽略（Host 会先检查存在性，不会弹系统错误框）
+
+实现走 DSH 现成的 `sessionController.openWorkspacePath`：`action: 'reveal'` 交给文件管理器定位，
+省略 action 则用操作系统默认关联打开。
+
 ## 护栏
 
 | 闸门 | 默认值 | 说明 |

@@ -2985,6 +2985,180 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * 会话里出现的本地文件路径：左键用系统程序打开，右键弹「打开所在目录 / 打开文件 / 复制路径」。
+     *
+     * 不包 DOM（React 重渲染会把包裹的元素冲掉），改用 caretRangeFromPoint 精确取
+     * 点击位置所在文本节点，用路径正则定位 token，再交给 Host 的 settings API。
+     * 路径是否存在由 Host 侧的 openWorkspacePath 校验，点不存在的路径只会静默失败。
+     */
+    function installPathActions() {
+      var cleanups = [];
+      var menuEl = null;
+      var lastMoveAt = 0;
+      /** Windows 盘符路径或 UNC 路径；尾部去掉标点，避免把句号逗号吃进去。 */
+      var PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|?*\r\n]*[^\s"'`<>|?*:.,;!?，。；：！？\r\n]/g;
+
+      function listen(target, type, handler, options) {
+        target.addEventListener(type, handler, options);
+        cleanups.push(function () {
+          target.removeEventListener(type, handler, options);
+        });
+      }
+
+      /** 取屏幕坐标处的文本节点与偏移（Chromium / 新版 Firefox 都支持）。 */
+      function pointAt(x, y) {
+        var range = null;
+        if (document.caretRangeFromPoint) {
+          range = document.caretRangeFromPoint(x, y);
+        } else if (document.caretPositionFromPoint) {
+          var position = document.caretPositionFromPoint(x, y);
+          if (position) {
+            range = document.createRange();
+            range.setStart(position.offsetNode, position.offset);
+            range.collapse(true);
+          }
+        }
+        if (!range || range.startContainer.nodeType !== 3) return null;
+        return { node: range.startContainer, offset: range.startOffset };
+      }
+
+      /** 点击位置命中的路径 token。 */
+      function pathAtPoint(x, y) {
+        var point = pointAt(x, y);
+        if (!point) return null;
+        var parent = point.node.parentElement;
+        if (!parent) return null;
+        // 输入框、代码块、我们的设置页/预览器都不参与。
+        if (parent.closest('pre, code, textarea, input, [contenteditable="true"]')) return null;
+        if (parent.closest('.di-settings, .dfs-img-root, .di-path-menu')) return null;
+        var text = point.node.textContent || '';
+        PATH_RE.lastIndex = 0;
+        var match;
+        while ((match = PATH_RE.exec(text)) !== null) {
+          if (point.offset >= match.index && point.offset <= match.index + match[0].length) return match[0];
+          if (match.index > point.offset) break;
+        }
+        return null;
+      }
+
+      function callHost(path, action) {
+        fetch(API + (action === 'reveal' ? '/reveal' : '/open'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: path }),
+        }).catch(function () {
+          /* 打开失败（路径不存在/无映射）时保持安静，不打断阅读 */
+        });
+      }
+
+      function closeMenu() {
+        if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl);
+        menuEl = null;
+      }
+
+      function showMenu(x, y, path) {
+        closeMenu();
+        var menu = document.createElement('div');
+        menu.className = 'di-path-menu';
+        menu.style.cssText =
+          'position:fixed;z-index:2147483000;min-width:196px;padding:4px;border-radius:10px;' +
+          'border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);' +
+          'box-shadow:0 10px 28px color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);';
+        var items = [
+          ['打开所在目录', 'reveal'],
+          ['打开文件', 'open'],
+          ['复制路径', 'copy'],
+        ];
+        items.forEach(function (item) {
+          var row = document.createElement('button');
+          row.type = 'button';
+          row.textContent = item[0];
+          row.style.cssText =
+            'display:block;width:100%;text-align:left;border:0;background:transparent;' +
+            'color:var(--dsw-alias-label-primary);padding:7px 10px;border-radius:7px;' +
+            'cursor:pointer;font-size:12px;font-family:inherit;';
+          row.addEventListener('mouseenter', function () {
+            row.style.background = 'var(--dsw-alias-interactive-bg-hover)';
+          });
+          row.addEventListener('mouseleave', function () {
+            row.style.background = 'transparent';
+          });
+          row.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeMenu();
+            if (item[1] === 'copy') {
+              if (navigator.clipboard) navigator.clipboard.writeText(path).catch(function () {});
+              return;
+            }
+            callHost(path, item[1]);
+          });
+          menu.appendChild(row);
+        });
+        document.body.appendChild(menu);
+        var rect = menu.getBoundingClientRect();
+        menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+        menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+        menuEl = menu;
+      }
+
+      // 左键单击路径：系统默认程序打开。有选区说明在选文字，不触发。
+      listen(document, 'click', function (event) {
+        if (event.button !== 0 || event.defaultPrevented) return;
+        if (menuEl) {
+          closeMenu();
+          return;
+        }
+        var selection = window.getSelection();
+        if (selection && !selection.isCollapsed) return;
+        var path = pathAtPoint(event.clientX, event.clientY);
+        if (!path) return;
+        event.preventDefault();
+        event.stopPropagation();
+        callHost(path, 'open');
+      }, true);
+
+      // 右键路径：我们的菜单替换系统菜单（路径上才有）。
+      listen(document, 'contextmenu', function (event) {
+        var path = pathAtPoint(event.clientX, event.clientY);
+        if (!path) {
+          closeMenu();
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        showMenu(event.clientX, event.clientY, path);
+      }, true);
+
+      // 悬停路径时给个 pointer，提示可点（节流，别每帧都在算 caret）。
+      listen(document, 'mousemove', function (event) {
+        var now = Date.now();
+        if (now - lastMoveAt < 120) return;
+        lastMoveAt = now;
+        if (menuEl) return;
+        document.body.style.cursor = pathAtPoint(event.clientX, event.clientY) ? 'pointer' : '';
+      }, { passive: true });
+
+      // 点别处关菜单。
+      listen(window, 'blur', closeMenu);
+      listen(document, 'keydown', function (event) {
+        if (event.key === 'Escape') closeMenu();
+      });
+
+      return function unmount() {
+        closeMenu();
+        for (var index = 0; index < cleanups.length; index += 1) {
+          try {
+            cleanups[index]();
+          } catch (error) {
+            /* 卸载阶段吞掉 */
+          }
+        }
+        cleanups.length = 0;
+      };
+    }
+
     /** 设置页保存后用来同步文件支持开关（apply 里赋值）。 */
     var syncFileSupport = null;
 
@@ -3073,6 +3247,16 @@ window.__ModuleLoader__.load({
           }
         };
       }, "interaction: file support unmount");
+
+      // 会话里点文件路径：左键系统打开，右键菜单「打开所在目录」。
+      try {
+        var disposePathActions = installPathActions();
+        ctx.effect(function () {
+          return disposePathActions;
+        }, "interaction: path actions");
+      } catch (error) {
+        console.error("[interaction] 路径点击增强加载失败", error);
+      }
     }
 
     return {
