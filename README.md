@@ -112,8 +112,11 @@ dsh plugin --profile web add ./dsh-interaction
 
 - **左键点击** → 用系统默认程序打开该文件
 - **右键点击** → 菜单：打开所在目录 / 打开文件 / 复制路径
-- 悬停时鼠标变成 pointer 提示可点
+- 路径带浅色底 + 虚线；悬停时底色加深、光标变 pointer
 - 输入框、代码块里不生效；路径不存在时静默忽略（Host 会先检查存在性，不会弹系统错误框）
+
+视觉用 CSS Custom Highlight API（`::highlight`）按文本范围上色，**不往 React 管的 DOM 里插节点**，
+所以会话重渲染、流式追加都不会打架；DOM 变化后 300ms 防抖重扫一遍范围。
 
 实现走 DSH 现成的 `sessionController.openWorkspacePath`：`action: 'reveal'` 交给文件管理器定位，
 省略 action 则用操作系统默认关联打开。

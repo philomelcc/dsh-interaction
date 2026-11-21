@@ -2986,24 +2986,89 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 路径标记的样式。
+     *
+     * 用 CSS Custom Highlight API 给文本范围上底色（`::highlight` 只作用在文本上），
+     * 这样不用往 React 管的 DOM 里插节点，重渲染也不会打架。
+     * 局限：只能改 color / background-color / text-decoration，做不了圆角和内边距。
+     */
+    var PATH_STYLE = [
+      "::highlight(di-path){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,var(--dsw-alias-bg-layer-1));text-decoration:underline dotted color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);text-underline-offset:2px}",
+      "::highlight(di-path-hover){background-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 32%,var(--dsw-alias-bg-layer-1));text-decoration:underline solid color-mix(in srgb,var(--dsw-alias-brand-primary) 70%,transparent)}",
+    ].join("");
+
+    /**
      * 会话里出现的本地文件路径：左键用系统程序打开，右键弹「打开所在目录 / 打开文件 / 复制路径」。
      *
-     * 不包 DOM（React 重渲染会把包裹的元素冲掉），改用 caretRangeFromPoint 精确取
-     * 点击位置所在文本节点，用路径正则定位 token，再交给 Host 的 settings API。
+     * 两套机制分工：
+     *  - 视觉（底色 / 悬停加深）：CSS Custom Highlight API 按文本范围上色，完全不改 DOM；
+     *  - 命中（点击 / 右键）：caretRangeFromPoint 取点击处文本节点，正则定位路径 token。
+     *
      * 路径是否存在由 Host 侧的 openWorkspacePath 校验，点不存在的路径只会静默失败。
      */
     function installPathActions() {
       var cleanups = [];
       var menuEl = null;
       var lastMoveAt = 0;
+      var scanTimer = null;
+      var observer = null;
       /** Windows 盘符路径或 UNC 路径；尾部去掉标点，避免把句号逗号吃进去。 */
       var PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|?*\r\n]*[^\s"'`<>|?*:.,;!?，。；：！？\r\n]/g;
+      var HIGHLIGHT_OK = typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight === "function";
 
       function listen(target, type, handler, options) {
         target.addEventListener(type, handler, options);
         cleanups.push(function () {
           target.removeEventListener(type, handler, options);
         });
+      }
+
+      // 路径底色 / 悬停样式的 <style>。
+      var styleEl = document.createElement("style");
+      styleEl.dataset.plugin = "dsh-interaction-paths";
+      styleEl.textContent = PATH_STYLE;
+      (document.head || document.documentElement).appendChild(styleEl);
+      cleanups.push(function () {
+        styleEl.remove();
+      });
+
+      /** 这些区域里的文本不参与：输入框、代码块、我们自己的 UI。 */
+      var SKIP_SELECTOR =
+        'pre, code, textarea, input, [contenteditable="true"], .di-settings, .dfs-img-root, .di-path-menu, script, style';
+
+      /**
+       * 扫一遍全文，把命中的路径范围注册成 highlight。
+       * React 重渲染后文本节点会换，所以 DOM 一变就重扫（300ms 防抖）。
+       */
+      function scanPaths() {
+        if (!HIGHLIGHT_OK) return;
+        var ranges = [];
+        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+          acceptNode: function (node) {
+            var parent = node.parentElement;
+            if (!parent || parent.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        });
+        var node;
+        while ((node = walker.nextNode())) {
+          var text = node.nodeValue || "";
+          // 快速排除：没有路径分隔符的文本不用跑正则。
+          if (text.indexOf("\\") < 0) continue;
+          PATH_RE.lastIndex = 0;
+          var match;
+          while ((match = PATH_RE.exec(text)) !== null) {
+            var range = document.createRange();
+            range.setStart(node, match.index);
+            range.setEnd(node, match.index + match[0].length);
+            ranges.push(range);
+          }
+        }
+        if (ranges.length === 0) {
+          CSS.highlights.delete("di-path");
+          return;
+        }
+        CSS.highlights.set("di-path", new Highlight(...ranges));
       }
 
       /** 取屏幕坐标处的文本节点与偏移（Chromium / 新版 Firefox 都支持）。 */
@@ -3023,29 +3088,41 @@ window.__ModuleLoader__.load({
         return { node: range.startContainer, offset: range.startOffset };
       }
 
-      /** 点击位置命中的路径 token。 */
-      function pathAtPoint(x, y) {
+      /** 点击位置命中的路径 token 及其文本范围。 */
+      function pathRangeAtPoint(x, y) {
         var point = pointAt(x, y);
         if (!point) return null;
         var parent = point.node.parentElement;
-        if (!parent) return null;
-        // 输入框、代码块、我们的设置页/预览器都不参与。
-        if (parent.closest('pre, code, textarea, input, [contenteditable="true"]')) return null;
-        if (parent.closest('.di-settings, .dfs-img-root, .di-path-menu')) return null;
-        var text = point.node.textContent || '';
+        if (!parent || parent.closest(SKIP_SELECTOR)) return null;
+        var text = point.node.textContent || "";
         PATH_RE.lastIndex = 0;
         var match;
         while ((match = PATH_RE.exec(text)) !== null) {
-          if (point.offset >= match.index && point.offset <= match.index + match[0].length) return match[0];
+          if (point.offset >= match.index && point.offset <= match.index + match[0].length) {
+            var range = document.createRange();
+            range.setStart(point.node, match.index);
+            range.setEnd(point.node, match.index + match[0].length);
+            return { path: match[0], range: range };
+          }
           if (match.index > point.offset) break;
         }
         return null;
       }
 
+      /** 悬停反馈：命中的路径范围单独用一个更深的 highlight。 */
+      function updateHover(hit) {
+        if (!HIGHLIGHT_OK) return;
+        if (!hit) {
+          CSS.highlights.delete("di-path-hover");
+          return;
+        }
+        CSS.highlights.set("di-path-hover", new Highlight(hit.range));
+      }
+
       function callHost(path, action) {
-        fetch(API + (action === 'reveal' ? '/reveal' : '/open'), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
+        fetch(API + (action === "reveal" ? "/reveal" : "/open"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ path: path }),
         }).catch(function () {
           /* 打开失败（路径不存在/无映射）时保持安静，不打断阅读 */
@@ -3059,36 +3136,36 @@ window.__ModuleLoader__.load({
 
       function showMenu(x, y, path) {
         closeMenu();
-        var menu = document.createElement('div');
-        menu.className = 'di-path-menu';
+        var menu = document.createElement("div");
+        menu.className = "di-path-menu";
         menu.style.cssText =
-          'position:fixed;z-index:2147483000;min-width:196px;padding:4px;border-radius:10px;' +
-          'border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);' +
-          'box-shadow:0 10px 28px color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);';
+          "position:fixed;z-index:2147483000;min-width:196px;padding:4px;border-radius:10px;" +
+          "border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);" +
+          "box-shadow:0 10px 28px color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);";
         var items = [
-          ['打开所在目录', 'reveal'],
-          ['打开文件', 'open'],
-          ['复制路径', 'copy'],
+          ["打开所在目录", "reveal"],
+          ["打开文件", "open"],
+          ["复制路径", "copy"],
         ];
         items.forEach(function (item) {
-          var row = document.createElement('button');
-          row.type = 'button';
+          var row = document.createElement("button");
+          row.type = "button";
           row.textContent = item[0];
           row.style.cssText =
-            'display:block;width:100%;text-align:left;border:0;background:transparent;' +
-            'color:var(--dsw-alias-label-primary);padding:7px 10px;border-radius:7px;' +
-            'cursor:pointer;font-size:12px;font-family:inherit;';
-          row.addEventListener('mouseenter', function () {
-            row.style.background = 'var(--dsw-alias-interactive-bg-hover)';
+            "display:block;width:100%;text-align:left;border:0;background:transparent;" +
+            "color:var(--dsw-alias-label-primary);padding:7px 10px;border-radius:7px;" +
+            "cursor:pointer;font-size:12px;font-family:inherit;";
+          row.addEventListener("mouseenter", function () {
+            row.style.background = "var(--dsw-alias-interactive-bg-hover)";
           });
-          row.addEventListener('mouseleave', function () {
-            row.style.background = 'transparent';
+          row.addEventListener("mouseleave", function () {
+            row.style.background = "transparent";
           });
-          row.addEventListener('click', function (event) {
+          row.addEventListener("click", function (event) {
             event.preventDefault();
             event.stopPropagation();
             closeMenu();
-            if (item[1] === 'copy') {
+            if (item[1] === "copy") {
               if (navigator.clipboard) navigator.clipboard.writeText(path).catch(function () {});
               return;
             }
@@ -3098,13 +3175,13 @@ window.__ModuleLoader__.load({
         });
         document.body.appendChild(menu);
         var rect = menu.getBoundingClientRect();
-        menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
-        menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+        menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
+        menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
         menuEl = menu;
       }
 
       // 左键单击路径：系统默认程序打开。有选区说明在选文字，不触发。
-      listen(document, 'click', function (event) {
+      listen(document, "click", function (event) {
         if (event.button !== 0 || event.defaultPrevented) return;
         if (menuEl) {
           closeMenu();
@@ -3112,42 +3189,69 @@ window.__ModuleLoader__.load({
         }
         var selection = window.getSelection();
         if (selection && !selection.isCollapsed) return;
-        var path = pathAtPoint(event.clientX, event.clientY);
-        if (!path) return;
+        var hit = pathRangeAtPoint(event.clientX, event.clientY);
+        if (!hit) return;
         event.preventDefault();
         event.stopPropagation();
-        callHost(path, 'open');
+        callHost(hit.path, "open");
       }, true);
 
       // 右键路径：我们的菜单替换系统菜单（路径上才有）。
-      listen(document, 'contextmenu', function (event) {
-        var path = pathAtPoint(event.clientX, event.clientY);
-        if (!path) {
+      listen(document, "contextmenu", function (event) {
+        var hit = pathRangeAtPoint(event.clientX, event.clientY);
+        if (!hit) {
           closeMenu();
           return;
         }
         event.preventDefault();
         event.stopPropagation();
-        showMenu(event.clientX, event.clientY, path);
+        showMenu(event.clientX, event.clientY, hit.path);
       }, true);
 
-      // 悬停路径时给个 pointer，提示可点（节流，别每帧都在算 caret）。
-      listen(document, 'mousemove', function (event) {
+      // 悬停：pointer 光标 + 底色加深（节流，别每帧都在算 caret）。
+      listen(document, "mousemove", function (event) {
         var now = Date.now();
         if (now - lastMoveAt < 120) return;
         lastMoveAt = now;
         if (menuEl) return;
-        document.body.style.cursor = pathAtPoint(event.clientX, event.clientY) ? 'pointer' : '';
+        var hit = pathRangeAtPoint(event.clientX, event.clientY);
+        document.body.style.cursor = hit ? "pointer" : "";
+        updateHover(hit);
       }, { passive: true });
 
       // 点别处关菜单。
-      listen(window, 'blur', closeMenu);
-      listen(document, 'keydown', function (event) {
-        if (event.key === 'Escape') closeMenu();
+      listen(window, "blur", closeMenu);
+      listen(document, "keydown", function (event) {
+        if (event.key === "Escape") closeMenu();
       });
+
+      // 首扫 + DOM 变化后重扫（会话切换、流式追加都会触发）。
+      scanPaths();
+      if (typeof MutationObserver === "function") {
+        observer = new MutationObserver(function () {
+          if (scanTimer !== null) return;
+          scanTimer = window.setTimeout(function () {
+            scanTimer = null;
+            scanPaths();
+          }, 300);
+        });
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      }
 
       return function unmount() {
         closeMenu();
+        if (observer) {
+          observer.disconnect();
+          observer = null;
+        }
+        if (scanTimer !== null) {
+          window.clearTimeout(scanTimer);
+          scanTimer = null;
+        }
+        if (HIGHLIGHT_OK) {
+          CSS.highlights.delete("di-path");
+          CSS.highlights.delete("di-path-hover");
+        }
         for (var index = 0; index < cleanups.length; index += 1) {
           try {
             cleanups[index]();
