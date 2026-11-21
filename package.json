@@ -13,10 +13,14 @@
     "index.js",
     "client.js",
     "lib",
+    "bin",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "dsh-relay": "bin/relay.mjs"
+  },
   "keywords": [
     "dsh",
     "deepseek-harness",

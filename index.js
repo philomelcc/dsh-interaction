@@ -21,7 +21,7 @@ import {
 } from './lib/tool.js'
 import { normalizeSteps } from './lib/flow.js'
 import { runAskFlow } from './lib/ask.js'
-import { createSessionBridge } from './lib/sessions.js'
+import { createSessionBridge, extractText } from './lib/sessions.js'
 
 export const name = 'interaction'
 // 只 inject 一定存在的服务；userQuestions / sessionController / sessionTitle / webServer
@@ -454,6 +454,68 @@ export async function apply(ctx, rawConfig = {}) {
           abort.signal,
         )
         return json(res, 200, { ok: true, opened: true })
+      }
+
+      // ------------------------------------------------------------ Codex relay
+      // 外部 agent（codex）没有 DSH 工具，走这几个 HTTP 原子能力：
+      // sessions 找会话 → send 发指令 → wait 等完成 → peek 看输出。
+      if (req.method === 'GET' && route === '/relay/sessions') {
+        const query = url.searchParams.get('query') || ''
+        const { sessions, total } = await bridge.listSessions({
+          query,
+          limit: 50,
+          signal: new AbortController().signal,
+        })
+        return json(res, 200, { ok: true, sessions, total })
+      }
+      if (req.method === 'GET' && route === '/relay/peek') {
+        const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+        const limit = Number(url.searchParams.get('limit') || 6)
+        const { messages } = await bridge.peekSession({ sessionId, limit })
+        return json(res, 200, { ok: true, sessionId, messages })
+      }
+      if (req.method === 'POST' && route === '/relay/send') {
+        const body = await readBody(req)
+        const result = await bridge.sendMessage({
+          fromAgent: undefined,
+          fromTitle: 'Codex',
+          sessionId: body.sessionId,
+          text: body.text,
+          mode: body.mode,
+          skipGuards: true,
+        })
+        return json(res, 200, { ok: true, ...result })
+      }
+      if (req.method === 'GET' && route === '/relay/wait') {
+        const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+        if (!sessionId) throw new Error('sessionId 不能为空')
+        const rawTimeout = Number(url.searchParams.get('timeoutMs') || 120000)
+        const timeoutMs = Math.min(Math.max(Number.isFinite(rawTimeout) ? rawTimeout : 120000, 1000), 600000)
+        const afterSeqRaw = url.searchParams.get('afterSeq')
+        const service = ctx.get('sessionController')
+        if (service === undefined || typeof service.wait !== 'function') {
+          throw new Error('当前部署没有 sessionController.wait，无法等待会话完成')
+        }
+        const result = await service.wait({
+          sessionId,
+          timeoutMs,
+          ...afterSeqRaw !== null && afterSeqRaw !== '' ? { afterSeq: Number(afterSeqRaw) } : {},
+        }, new AbortController().signal)
+        const messages = []
+        for (const record of result?.output?.records ?? []) {
+          const event = record?.event ?? record
+          const text = extractText(event?.data)
+          if (!text) continue
+          messages.push({ seq: Number(event.seq) || 0, text })
+        }
+        return json(res, 200, {
+          ok: true,
+          sessionId,
+          reason: result?.reason ?? 'unknown',
+          running: result?.state?.running === true,
+          messages,
+          text: messages.length > 0 ? messages[messages.length - 1].text : '',
+        })
       }
       return json(res, 404, { ok: false, error: 'not found' })
     } catch (error) {

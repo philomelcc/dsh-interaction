@@ -2993,8 +2993,10 @@ window.__ModuleLoader__.load({
      * 悬停时底色往品牌色偏、文字和下划线变品牌色。
      */
     var PATH_STYLE = [
-      ".di-path{background:var(--dsw-alias-markdown-inline-code);border-radius:8px;padding:0 5px;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);text-underline-offset:2px;cursor:pointer;transition:background .15s ease,color .15s ease,text-decoration-color .15s ease}",
-      ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
+      // 常态：code 同款背景 token + 一圈淡边框（背景和页面底色只差几级灰，没边框分不出边界）。
+      ".di-path{background:var(--dsw-alias-markdown-inline-code);border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 12%,transparent);border-radius:8px;padding:0 5px;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);text-underline-offset:2px;cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease,text-decoration-color .15s ease}",
+      // 悬停：底色往品牌色偏、边框和文字一起变品牌色。
+      ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
     ].join("");
 
     /**

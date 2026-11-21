@@ -122,6 +122,51 @@ React 重渲染把 span 冲掉后会重新包（400ms 防抖，已包的跳过�
 实现走 DSH 现成的 `sessionController.openWorkspacePath`：`action: 'reveal'` 交给文件管理器定位，
 省略 action 则用操作系统默认关联打开。
 
+## Codex relay（外部 agent 驱动 DSH）
+
+给外部 agent（例如 codex）用的一层 HTTP + CLI：**发指令 → 等 DSH 会话跑完 → 读结果 → 再发修改意见**。
+循环由外部 agent 自己驱动，插件只提供原子能力。
+
+HTTP（挂在 `/plugins/dsh-interaction/api/relay`）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET /sessions?query=` | 列会话（标题/id/是否在跑/工作区） |
+| `POST /send` `{ sessionId, text, mode? }` | 投递指令，目标是 `plugin:interaction` 通知卡片；relay 不受会话间防环/限频约束 |
+| `GET /wait?sessionId=&timeoutMs=&afterSeq=` | 等会话空闲，返回 `afterSeq` 之后的助手回复；`timeoutMs` 上限 10 分钟 |
+| `GET /peek?sessionId=&limit=` | 读最近消息 |
+
+CLI（`bin/relay.mjs`，npm 装好后命令名是 `dsh-relay`）：
+
+```sh
+node bin/relay.mjs sessions --query 视频
+node bin/relay.mjs send  --session session-xxx --text "把 README 的安装章节改一下"
+node bin/relay.mjs wait  --session session-xxx --timeout 180 --afterSeq 12
+node bin/relay.mjs ask   --session session-xxx --text "任务：…" --timeout 300
+```
+
+`ask` = send + wait，输出一行 JSON：
+
+```json
+{ "ok": true, "sessionId": "…", "accepted": true, "reason": "idle",
+  "text": "本次回复正文", "messages": [{ "seq": 2564, "text": "…" }] }
+```
+
+`reason` 有三种：`idle`（跑完了）、`input-required`（DSH 在中途提问，等用户回答）、`timeout`（超时）。
+
+外部 agent 侧的循环大致是：
+
+```
+result = ask(session, "任务：…")
+loop:
+  if result.reason == "input-required": 停下来等用户
+  verdict = 验收(result.text)
+  if verdict 通过: break
+  result = ask(session, "修改意见：" + verdict)
+```
+
+CLI 用 `--base` 或环境变量 `DSH_RELAY_BASE` 指向别的 host（默认 `http://127.0.0.1:3080`）。
+
 ## 护栏
 
 | 闸门 | 默认值 | 说明 |
