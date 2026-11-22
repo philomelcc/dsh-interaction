@@ -39,6 +39,8 @@ const DEFAULTS = {
   askFlow: true,
   crossSession: true,
   fileSupport: true,
+  pathLinks: true,
+  relay: true,
   crossSessionMaxDepth: 3,
   crossSessionRateLimit: 3,
 }
@@ -69,6 +71,8 @@ export function normalizeSettings(input, fallback = DEFAULTS) {
     askFlow: bool('askFlow'),
     crossSession: bool('crossSession'),
     fileSupport: bool('fileSupport'),
+    pathLinks: bool('pathLinks'),
+    relay: bool('relay'),
     crossSessionMaxDepth: integer('crossSessionMaxDepth', 1, 10),
     crossSessionRateLimit: integer('crossSessionRateLimit', 1, 60),
   }
@@ -459,6 +463,9 @@ export async function apply(ctx, rawConfig = {}) {
       // ------------------------------------------------------------ Codex relay
       // 外部 agent（codex）没有 DSH 工具，走这几个 HTTP 原子能力：
       // sessions 找会话 → send 发指令 → wait 等完成 → peek 看输出。
+      if (route.startsWith('/relay') && !settings.relay) {
+        return json(res, 403, { ok: false, error: 'Codex relay 已在设置 → 交互增强里关闭' })
+      }
       if (req.method === 'GET' && route === '/relay/sessions') {
         const query = url.searchParams.get('query') || ''
         const { sessions, total } = await bridge.listSessions({

@@ -2909,9 +2909,19 @@ window.__ModuleLoader__.load({
             hint: "session_list / session_send / session_peek 工具：向其它会话发消息并唤醒它，发完能回读回复。带防环（链路深度）和限频两道护栏。",
           },
           {
+            key: "relay",
+            title: "Codex relay",
+            hint: "给外部 agent（codex）用的 HTTP 接口 + CLI：向 DSH 会话发指令、等它跑完、读结果，可循环验收。关掉后 /relay/* 端点直接 403。",
+          },
+          {
             key: "fileSupport",
             title: "文件支持扩展",
             hint: "右侧边栏文档预览：音频波形 + 播放器、图片滚轮缩放 + 顺逆时针旋转、原图预览增强。关掉后回到 DSH 自带的预览。",
+          },
+          {
+            key: "pathLinks",
+            title: "文件路径点击",
+            hint: "会话里的本地路径（C:\\...）变成可点的块：左键用系统程序打开，右键菜单「打开所在目录 / 打开文件 / 复制路径」。",
           },
         ];
 
@@ -3227,6 +3237,8 @@ window.__ModuleLoader__.load({
 
     /** 设置页保存后用来同步文件支持开关（apply 里赋值）。 */
     var syncFileSupport = null;
+    /** 设置页保存后用来同步「文件路径点击」开关（apply 里赋值）。 */
+    var syncPathLinks = null;
 
     /**
      * 插件体：设置页始终注册；文件支持按开关挂载。
@@ -3248,6 +3260,8 @@ window.__ModuleLoader__.load({
 
       var fileSupportOn = true;
       var mounted = null;
+      var pathLinksOn = true;
+      var pathActionsDispose = null;
 
       function sync() {
         try {
@@ -3271,6 +3285,21 @@ window.__ModuleLoader__.load({
         sync();
       };
 
+      /** 会话里点文件路径：左键系统打开，右键菜单「打开所在目录」。 */
+      function syncPathLinksNow() {
+        try {
+          if (pathLinksOn && !pathActionsDispose) {
+            pathActionsDispose = installPathActions();
+          } else if (!pathLinksOn && pathActionsDispose) {
+            pathActionsDispose();
+            pathActionsDispose = null;
+          }
+        } catch (error) {
+          console.error("[interaction] 路径点击增强加载失败", error);
+          pathActionsDispose = null;
+        }
+      }
+
       // 设置页优先注册：即使文件支持那一半出错，设置入口也必须在。
       ctx.slots.inject("settings.section", function () {
         return ctx.slots.register(
@@ -3284,6 +3313,7 @@ window.__ModuleLoader__.load({
           },
           makeSettingsPage(function (settings) {
             if (syncFileSupport) syncFileSupport(settings.fileSupport);
+            if (syncPathLinks) syncPathLinks(settings.pathLinks);
           })
         );
       });
@@ -3295,7 +3325,10 @@ window.__ModuleLoader__.load({
           return response.json();
         })
         .then(function (data) {
-          if (data && data.settings) syncFileSupport(data.settings.fileSupport);
+          if (data && data.settings) {
+            syncFileSupport(data.settings.fileSupport);
+            syncPathLinks(data.settings.pathLinks);
+          }
         })
         .catch(function () {
           /* 读不到设置就保持默认 */
@@ -3314,15 +3347,24 @@ window.__ModuleLoader__.load({
         };
       }, "interaction: file support unmount");
 
-      // 会话里点文件路径：左键系统打开，右键菜单「打开所在目录」。
-      try {
-        var disposePathActions = installPathActions();
-        ctx.effect(function () {
-          return disposePathActions;
-        }, "interaction: path actions");
-      } catch (error) {
-        console.error("[interaction] 路径点击增强加载失败", error);
-      }
+      // 会话里点文件路径：默认先挂上，异步读到设置后按开关校正。
+      syncPathLinks = function (on) {
+        pathLinksOn = on !== false;
+        syncPathLinksNow();
+      };
+      syncPathLinksNow();
+      ctx.effect(function () {
+        return function () {
+          if (pathActionsDispose) {
+            try {
+              pathActionsDispose();
+            } catch (error) {
+              /* 卸载阶段吞掉 */
+            }
+            pathActionsDispose = null;
+          }
+        };
+      }, "interaction: path actions unmount");
     }
 
     return {
