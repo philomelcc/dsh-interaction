@@ -491,7 +491,11 @@ export async function apply(ctx, rawConfig = {}) {
         if (service === undefined || typeof service.openWorkspacePath !== 'function') {
           throw new Error('当前部署没有 sessionController，打不开本地文件')
         }
-        await service.openWorkspacePath({ path: found[0] }, new AbortController().signal)
+        const targetAction = body.action === 'reveal' ? 'reveal' : undefined
+        await service.openWorkspacePath(
+          targetAction === undefined ? { path: found[0] } : { path: found[0], action: targetAction },
+          new AbortController().signal,
+        )
         return json(res, 200, { ok: true, opened: true, resolvedPath: found[0] })
       }
 

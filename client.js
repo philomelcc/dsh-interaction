@@ -3079,13 +3079,20 @@ window.__ModuleLoader__.load({
           if (code.querySelector(".di-path")) continue;
           var text = (code.textContent || "").trim();
           if (!text) continue;
+          // 绝对路径优先；否则认「带反斜杠 + 带扩展名」的相对路径（如 项目\说明.md）。
+          var target = null;
           PATH_RE.lastIndex = 0;
           var match = PATH_RE.exec(text);
-          if (!match || match[0].length !== text.length) continue;
+          if (match && match[0].length === text.length) {
+            target = match[0];
+          } else if (localRelativePath(text) !== null && /\.\w{1,8}$/.test(text)) {
+            target = text;
+          }
+          if (target === null) continue;
           var span = document.createElement("span");
           span.className = "di-path";
-          span.setAttribute("data-path", match[0]);
-          span.textContent = match[0];
+          span.setAttribute("data-path", target);
+          span.textContent = target;
           code.textContent = "";
           code.appendChild(span);
         }
@@ -3153,12 +3160,17 @@ window.__ModuleLoader__.load({
         return href;
       }
 
+      /** 是不是盘符 / UNC 绝对路径。 */
+      function isAbsolutePath(path) {
+        return /^[A-Za-z]:[\\/]/.test(path) || path.slice(0, 2) === "\\\\";
+      }
+
       /** 相对路径交给 Host 解析（按会话 cwd 探测 + 存在性检查），解析不到就静默。 */
-      function callHostRelative(path) {
+      function callHostRelative(path, action) {
         fetch(API + "/open-relative", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: path }),
+          body: JSON.stringify({ path: path, action: action === "reveal" ? "reveal" : undefined }),
         }).catch(function () {
           /* 找不到对应文件时保持安静 */
         });
@@ -3204,7 +3216,8 @@ window.__ModuleLoader__.load({
               if (navigator.clipboard) navigator.clipboard.writeText(path).catch(function () {});
               return;
             }
-            callHost(path, item[1]);
+            if (isAbsolutePath(path)) callHost(path, item[1]);
+            else callHostRelative(path, item[1]);
           });
           menu.appendChild(row);
         });
@@ -3237,7 +3250,8 @@ window.__ModuleLoader__.load({
         if (path) {
           event.preventDefault();
           event.stopPropagation();
-          callHost(path, "open");
+          if (isAbsolutePath(path)) callHost(path, "open");
+          else callHostRelative(path, "open");
           return;
         }
         // 2) markdown 链接指向的相对路径：交给 Host 按各会话 cwd 探测，文件真存在才打开。
