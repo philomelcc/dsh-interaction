@@ -12,7 +12,7 @@
 
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 
 import {
   defineTool,
@@ -458,6 +458,41 @@ export async function apply(ctx, rawConfig = {}) {
           abort.signal,
         )
         return json(res, 200, { ok: true, opened: true })
+      }
+
+      // 相对路径（会话里的 markdown 链接目标）：按各会话 cwd 探测，文件真存在才打开。
+      // 这是「尽量不误伤」的关键——解析不到就静默失败，不会打开错东西。
+      if (req.method === 'POST' && route === '/open-relative') {
+        const body = await readBody(req)
+        const relative = String(body.path || '').trim()
+        if (!relative) throw new Error('path 不能为空')
+        const { sessions } = await bridge.listSessions({ limit: 100 })
+        const candidates = sessions
+          .filter((session) => typeof session.cwd === 'string' && session.cwd.length > 0)
+          .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+        const found = []
+        for (const session of candidates) {
+          const absolute = isAbsolute(relative) ? relative : join(session.cwd, relative)
+          try {
+            await access(absolute)
+            found.push(absolute)
+            if (found.length >= 3) break
+          } catch {
+            /* 这个工作区里没有，换下一个 */
+          }
+        }
+        if (found.length === 0) {
+          throw new Error(`按相对路径找不到文件：${relative}`)
+        }
+        if (found.length > 1) {
+          log(`open-relative 有歧义，取最近活跃会话里的：${found.join(' | ')}`)
+        }
+        const service = ctx.get('sessionController')
+        if (service === undefined || typeof service.openWorkspacePath !== 'function') {
+          throw new Error('当前部署没有 sessionController，打不开本地文件')
+        }
+        await service.openWorkspacePath({ path: found[0] }, new AbortController().signal)
+        return json(res, 200, { ok: true, opened: true, resolvedPath: found[0] })
       }
 
       // ------------------------------------------------------------ Codex relay

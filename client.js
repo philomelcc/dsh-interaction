@@ -2921,7 +2921,7 @@ window.__ModuleLoader__.load({
           {
             key: "pathLinks",
             title: "文件路径点击",
-            hint: "会话里的本地路径（C:\\...）变成可点的块：左键用系统程序打开，右键菜单「打开所在目录 / 打开文件 / 复制路径」。",
+            hint: "会话里的本地路径（C:\\...）变成可点的块：左键用系统程序打开，右键菜单「打开所在目录 / 打开文件 / 复制路径」。行内代码里的纯路径、markdown 链接指向的相对路径也能点（相对路径按会话工作区解析，文件不存在就不动）。",
           },
         ];
 
@@ -3138,6 +3138,32 @@ window.__ModuleLoader__.load({
         });
       }
 
+      /**
+       * 链接是否指向本地相对路径。
+       *
+       * 只收「像文件」的：排除外链（带 scheme）、站内绝对路径（/ 开头）、锚点；
+       * 剩下的还要求带反斜杠或带扩展名——纯单词链接（`docs`、`这里`）一律不碰。
+       */
+      function localRelativePath(raw) {
+        var href = String(raw || "").trim();
+        if (!href) return null;
+        if (href.charAt(0) === "#" || href.charAt(0) === "/" || href.charAt(0) === "\\") return null;
+        if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+        if (href.indexOf("\\") < 0 && !/\.\w{1,8}$/.test(href)) return null;
+        return href;
+      }
+
+      /** 相对路径交给 Host 解析（按会话 cwd 探测 + 存在性检查），解析不到就静默。 */
+      function callHostRelative(path) {
+        fetch(API + "/open-relative", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: path }),
+        }).catch(function () {
+          /* 找不到对应文件时保持安静 */
+        });
+      }
+
       function closeMenu() {
         if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl);
         menuEl = null;
@@ -3206,11 +3232,24 @@ window.__ModuleLoader__.load({
         }
         var selection = window.getSelection();
         if (selection && !selection.isCollapsed) return;
+        // 1) 路径 chip
         var path = pathFromEvent(event);
-        if (!path) return;
+        if (path) {
+          event.preventDefault();
+          event.stopPropagation();
+          callHost(path, "open");
+          return;
+        }
+        // 2) markdown 链接指向的相对路径：交给 Host 按各会话 cwd 探测，文件真存在才打开。
+        var anchor = event.target && typeof event.target.closest === "function"
+          ? event.target.closest("a[href]")
+          : null;
+        if (!anchor || anchor.closest(SKIP_SELECTOR)) return;
+        var relative = localRelativePath(anchor.getAttribute("href") || "");
+        if (!relative) return;
         event.preventDefault();
         event.stopPropagation();
-        callHost(path, "open");
+        callHostRelative(relative);
       }, true);
 
       // 右键路径：我们的菜单替换系统菜单（路径上才有）。
