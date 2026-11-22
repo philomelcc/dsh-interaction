@@ -3026,8 +3026,6 @@ window.__ModuleLoader__.load({
       var menuEl = null;
       var scanTimer = null;
       var observer = null;
-      /** Windows 盘符路径或 UNC 路径；尾部去掉标点，避免把句号逗号吃进去。 */
-      var PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|?*\r\n]*[^\s"'`<>|?*:.,;!?，。；：！？\r\n]/g;
 
       function listen(target, type, handler, options) {
         target.addEventListener(type, handler, options);
@@ -3049,28 +3047,22 @@ window.__ModuleLoader__.load({
       var SKIP_SELECTOR =
         'pre, code, textarea, input, [contenteditable="true"], [role="dialog"], aside, nav, .di-settings, .dfs-img-root, .di-path, .di-path-menu, script, style';
 
-      /** 把全文里还没包过的路径包成 .di-path chip。 */
+      /**
+       * 只处理两种「格式本身就有明确边界」的写法：
+       *  - 行内代码里整段就是一个路径（`` `C:\foo bar\说明.md` ``，含空格也整段吃）
+       *  - markdown 链接（点击时交给 Host 按会话 cwd 解析）
+       *
+       * 正文里的裸路径不猜了：没空格会被整段误吃、带空格的又会被截断，误伤太高。
+       * 想让路径可点，用反引号包住整段即可——反引号是 Markdown 原生语法，功能关掉后也不会留痕迹。
+       */
       function wrapPaths() {
-        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-          acceptNode: function (node) {
-            var parent = node.parentElement;
-            if (!parent || parent.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
-            return NodeFilter.FILTER_ACCEPT;
-          },
-        });
-        var nodes = [];
-        var node;
-        while ((node = walker.nextNode())) nodes.push(node);
-        for (var index = 0; index < nodes.length; index += 1) wrapOne(nodes[index]);
         wrapInlineCodePaths();
       }
 
       /**
-       * 行内代码里「整段就是一个路径」时也包成 chip。
+       * 行内代码里「整段就是一个路径」时包成 chip。
        *
-       * AI 很爱用反引号包路径（`` `C:\...` ``），但 `code` 在整个扫描里被跳过了，
-       * 导致这种最常见的写法反而不响应点击。这里只处理「整段内容就是路径」的 code，
-       * 命令里的路径（`cd C:\foo`）不动。
+       * 边界由反引号本身给出，所以含空格的路径也能整段识别；命令里的路径（`cd C:\foo`）不动。
        */
       function wrapInlineCodePaths() {
         var codes = document.querySelectorAll("code");
@@ -3080,13 +3072,12 @@ window.__ModuleLoader__.load({
           if (code.querySelector(".di-path")) continue;
           var text = (code.textContent || "").trim();
           if (!text) continue;
-          // 绝对路径优先；否则认「带反斜杠 + 带扩展名」的相对路径（如 项目\说明.md）。
           var target = null;
-          PATH_RE.lastIndex = 0;
-          var match = PATH_RE.exec(text);
-          if (match && match[0].length === text.length) {
-            target = match[0];
+          // 整段是绝对路径（盘符 / UNC）——含空格也照收。
+          if (/^[A-Za-z]:[\\/]/.test(text) || text.slice(0, 2) === "\\\\") {
+            target = text;
           } else if (localRelativePath(text) !== null && /\.\w{1,8}$/.test(text)) {
+            // 整段是相对路径（带反斜杠 + 扩展名）。
             target = text;
           }
           if (target === null) continue;
@@ -3096,33 +3087,6 @@ window.__ModuleLoader__.load({
           span.textContent = target;
           code.textContent = "";
           code.appendChild(span);
-        }
-      }
-
-      /** 单个文本节点里的所有路径：从后往前切，前面的字符索引不受影响。 */
-      function wrapOne(textNode) {
-        if (!textNode.isConnected) return;
-        var text = textNode.nodeValue || "";
-        if (text.indexOf("\\") < 0) return;
-        var matches = [];
-        PATH_RE.lastIndex = 0;
-        var match;
-        while ((match = PATH_RE.exec(text)) !== null) {
-          matches.push({ index: match.index, value: match[0] });
-        }
-        for (var i = matches.length - 1; i >= 0; i -= 1) {
-          var item = matches[i];
-          try {
-            var before = textNode.splitText(item.index);
-            before.splitText(item.value.length);
-            var span = document.createElement("span");
-            span.className = "di-path";
-            span.setAttribute("data-path", item.value);
-            span.textContent = item.value;
-            before.parentNode.replaceChild(span, before);
-          } catch (error) {
-            /* 切分失败就跳过这一段，不影响其它路径 */
-          }
         }
       }
 

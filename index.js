@@ -153,6 +153,29 @@ export async function apply(ctx, rawConfig = {}) {
   }
   let settings = await loadSettings(fallback)
 
+  // 文件路径点击开启时，往所有 agent 的上下文里塞一句「写路径用反引号」的提示。
+  // 关闭时 text() 返回空串 → 这段上下文整段消失；反引号本身是 Markdown 语法，历史消息不会留任何标记。
+  const systemPrompt = ctx.get('systemPrompt')
+  if (systemPrompt && typeof systemPrompt.context === 'function') {
+    try {
+      ctx.effect(
+        () => systemPrompt.context({
+          name: 'interaction-path-links',
+          order: 310,
+          text: () =>
+            settings.pathLinks
+              ? '[交互增强] 本会话的「文件路径点击」已开启：写文件或目录路径时，请用反引号把整段路径包住'
+                + '（例如 `C:\\Users\\me\\项目 名\\说明.md`，含空格也要包全），用户点一下就能打开；'
+                + '写相对路径也可以（会按会话工作区解析）。正文里裸写路径不会变成可点块。'
+              : '',
+        }),
+        'interaction: path link hint',
+      )
+    } catch (error) {
+      log(`文件路径点击提示注入失败：${error?.message ?? error}`)
+    }
+  }
+
   const bridge = createSessionBridge({
     ctx,
     config: { maxDepth: settings.crossSessionMaxDepth, rateLimit: settings.crossSessionRateLimit },
