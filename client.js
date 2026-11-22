@@ -3004,12 +3004,13 @@ window.__ModuleLoader__.load({
      */
     var PATH_STYLE = [
       // 常态：code 同款背景 token + 一圈淡边框（背景和页面底色只差几级灰，没边框分不出边界）。
-      ".di-path{background:var(--dsw-alias-markdown-inline-code);border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 12%,transparent);border-radius:8px;padding:0 5px;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);text-underline-offset:2px;cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease,text-decoration-color .15s ease}",
-      // 悬停：底色往品牌色偏、边框和文字一起变品牌色。
-      ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
-      // 行内代码里的路径：沿用 code 自己的底和内边距，只加下划线，别叠两层背景。
+      // 下划线只在悬停时出现——路径多的时候常驻下划线会眼花。
+      ".di-path{background:var(--dsw-alias-markdown-inline-code);border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 12%,transparent);border-radius:8px;padding:0 5px;cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease,text-decoration-color .15s ease}",
+      // 悬停：底色往品牌色偏、边框和文字一起变品牌色、补上下划线。
+      ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);color:var(--dsw-alias-brand-primary);text-decoration:underline;text-decoration-color:var(--dsw-alias-brand-primary);text-underline-offset:2px}",
+      // 行内代码里的路径：沿用 code 自己的底和内边距，别叠两层背景。
       "code .di-path{background:transparent;border:0;padding:0}",
-      "code .di-path:hover{background:transparent;color:var(--dsw-alias-brand-primary)}",
+      "code .di-path:hover{background:transparent;color:var(--dsw-alias-brand-primary);text-decoration:underline;text-decoration-color:var(--dsw-alias-brand-primary);text-underline-offset:2px}",
     ].join("");
 
     /**
