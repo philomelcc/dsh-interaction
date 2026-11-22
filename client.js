@@ -2891,7 +2891,7 @@ window.__ModuleLoader__.load({
         if (!settings) {
           return h(
             "div",
-            { style: S.page },
+            { style: S.page, className: "di-settings" },
             h("div", { style: S.lead }, error || "正在读取交互增强设置……"),
             error ? h("div", { style: S.error }, error) : null
           );
@@ -2931,7 +2931,7 @@ window.__ModuleLoader__.load({
           h(
             "div",
             { style: S.lead },
-            "这里控制「交互增强」插件的三块能力。开关点一下立即生效：AI 侧的工具当场注册/注销，文件支持会立刻切换预览渲染器。"
+            "这里控制「交互增强」插件的五块能力。开关点一下立即生效：AI 侧的工具当场注册/注销，文件支持与路径点击会立刻切换。"
           ),
           cards.map(function (card) {
             var on = settings[card.key] === true;
@@ -3041,9 +3041,9 @@ window.__ModuleLoader__.load({
         styleEl.remove();
       });
 
-      /** 这些区域里的文本不参与：输入框、代码块、已经包过的 chip、我们自己的 UI。 */
+      /** 这些区域里的文本不参与：输入框、代码块、弹窗/侧栏、已经包过的 chip、我们自己的 UI。 */
       var SKIP_SELECTOR =
-        'pre, code, textarea, input, [contenteditable="true"], .di-settings, .dfs-img-root, .di-path, .di-path-menu, script, style';
+        'pre, code, textarea, input, [contenteditable="true"], [role="dialog"], aside, nav, .di-settings, .dfs-img-root, .di-path, .di-path-menu, script, style';
 
       /** 把全文里还没包过的路径包成 .di-path chip。 */
       function wrapPaths() {
