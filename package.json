@@ -1,6 +1,6 @@
 {
   "name": "@philomelcc/dsh-interaction",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "DSH 交互增强：分支式提问 + 跨会话唤醒 + 文件支持扩展（音频/图片预览），三块能力都能在设置里单独开关。",
   "main": "index.js",
