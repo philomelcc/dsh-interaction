@@ -10,7 +10,7 @@
  * 开关改动后工具会立即注销/重注册，agent 下一个请求就能看到。
  */
 
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
@@ -493,22 +493,43 @@ export async function apply(ctx, rawConfig = {}) {
         const candidates = sessions
           .filter((session) => typeof session.cwd === 'string' && session.cwd.length > 0)
           .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+        // 相对路径常常省略的不仅是工作区前缀，还有项目子目录（如 素材\x.png 实际在 项目A\素材\x.png），
+        // 所以每个 cwd 除了自身，也把它的一级子目录当基准试一遍。
+        const basesCache = new Map()
+        const basesFor = async (cwd) => {
+          if (basesCache.has(cwd)) return basesCache.get(cwd)
+          const bases = [cwd]
+          try {
+            for (const entry of await readdir(cwd, { withFileTypes: true })) {
+              if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                bases.push(join(cwd, entry.name))
+              }
+            }
+          } catch {
+            /* 读不到目录就只用 cwd 本身 */
+          }
+          basesCache.set(cwd, bases)
+          return bases
+        }
         const found = []
         for (const session of candidates) {
-          const absolute = isAbsolute(relative) ? relative : join(session.cwd, relative)
-          try {
-            await access(absolute)
-            found.push(absolute)
+          for (const base of await basesFor(session.cwd)) {
+            const absolute = isAbsolute(relative) ? relative : join(base, relative)
+            try {
+              await access(absolute)
+              if (!found.includes(absolute)) found.push(absolute)
+            } catch {
+              /* 这个基准下没有，继续试下一个 */
+            }
             if (found.length >= 3) break
-          } catch {
-            /* 这个工作区里没有，换下一个 */
           }
+          if (found.length >= 3) break
         }
         if (found.length === 0) {
           throw new Error(`按相对路径找不到文件：${relative}`)
         }
         if (found.length > 1) {
-          log(`open-relative 有歧义，取最近活跃会话里的：${found.join(' | ')}`)
+          log(`open-relative 有歧义，取第一个：${found.join(' | ')}`)
         }
         const service = ctx.get('sessionController')
         if (service === undefined || typeof service.openWorkspacePath !== 'function') {
