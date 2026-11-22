@@ -10,7 +10,7 @@
  * 开关改动后工具会立即注销/重注册，agent 下一个请求就能看到。
  */
 
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
@@ -422,6 +422,53 @@ export async function apply(ctx, rawConfig = {}) {
 
   // ---------------------------------------------------------------- HTTP 设置端点
 
+  /**
+   * 相对路径 → 绝对路径候选。
+   *
+   * 按会话 cwd（最近活跃优先）探测，每个 cwd 的一级子目录也当基准试一遍
+   * （消息里的相对路径常常省略了项目目录，如 `素材\x.png` 实际在 `项目A\素材\x.png`）。
+   * 文件真存在才返回，找不到就是空数组。
+   */
+  async function resolveRelativePath(relativePath) {
+    const raw = String(relativePath || '').trim()
+    if (!raw) return []
+    const { sessions } = await bridge.listSessions({ limit: 100 })
+    const candidates = sessions
+      .filter((session) => typeof session.cwd === 'string' && session.cwd.length > 0)
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+    const basesCache = new Map()
+    const basesFor = async (cwd) => {
+      if (basesCache.has(cwd)) return basesCache.get(cwd)
+      const bases = [cwd]
+      try {
+        for (const entry of await readdir(cwd, { withFileTypes: true })) {
+          if (entry.isDirectory() && !entry.name.startsWith('.')) {
+            bases.push(join(cwd, entry.name))
+          }
+        }
+      } catch {
+        /* 读不到目录就只用 cwd 本身 */
+      }
+      basesCache.set(cwd, bases)
+      return bases
+    }
+    const found = []
+    for (const session of candidates) {
+      for (const base of await basesFor(session.cwd)) {
+        const absolute = isAbsolute(raw) ? raw : join(base, raw)
+        try {
+          await access(absolute)
+          if (!found.includes(absolute)) found.push(absolute)
+        } catch {
+          /* 这个基准下没有，继续试下一个 */
+        }
+        if (found.length >= 3) break
+      }
+      if (found.length >= 3) break
+    }
+    return found
+  }
+
   const apiHandler = async (req, res, next) => {
     const url = new URL(req.url, 'http://127.0.0.1')
     if (!url.pathname.startsWith(API_PREFIX)) {
@@ -483,48 +530,34 @@ export async function apply(ctx, rawConfig = {}) {
         return json(res, 200, { ok: true, opened: true })
       }
 
+      // 解析路径，告诉客户端它是文件还是目录：左键时文件走侧边栏预览、目录走系统打开。
+      if (req.method === 'POST' && route === '/resolve') {
+        const body = await readBody(req)
+        const raw = String(body.path || '').trim()
+        if (!raw) throw new Error('path 不能为空')
+        const found = isAbsolute(raw) ? [raw] : await resolveRelativePath(raw)
+        if (found.length === 0) throw new Error(`找不到路径：${raw}`)
+        let info
+        try {
+          info = await stat(found[0])
+        } catch {
+          throw new Error(`路径不存在：${found[0]}`)
+        }
+        return json(res, 200, {
+          ok: true,
+          absolute: found[0],
+          isDirectory: info.isDirectory(),
+          candidates: found.slice(0, 3),
+        })
+      }
+
       // 相对路径（会话里的 markdown 链接目标）：按各会话 cwd 探测，文件真存在才打开。
       // 这是「尽量不误伤」的关键——解析不到就静默失败，不会打开错东西。
       if (req.method === 'POST' && route === '/open-relative') {
         const body = await readBody(req)
         const relative = String(body.path || '').trim()
         if (!relative) throw new Error('path 不能为空')
-        const { sessions } = await bridge.listSessions({ limit: 100 })
-        const candidates = sessions
-          .filter((session) => typeof session.cwd === 'string' && session.cwd.length > 0)
-          .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
-        // 相对路径常常省略的不仅是工作区前缀，还有项目子目录（如 素材\x.png 实际在 项目A\素材\x.png），
-        // 所以每个 cwd 除了自身，也把它的一级子目录当基准试一遍。
-        const basesCache = new Map()
-        const basesFor = async (cwd) => {
-          if (basesCache.has(cwd)) return basesCache.get(cwd)
-          const bases = [cwd]
-          try {
-            for (const entry of await readdir(cwd, { withFileTypes: true })) {
-              if (entry.isDirectory() && !entry.name.startsWith('.')) {
-                bases.push(join(cwd, entry.name))
-              }
-            }
-          } catch {
-            /* 读不到目录就只用 cwd 本身 */
-          }
-          basesCache.set(cwd, bases)
-          return bases
-        }
-        const found = []
-        for (const session of candidates) {
-          for (const base of await basesFor(session.cwd)) {
-            const absolute = isAbsolute(relative) ? relative : join(base, relative)
-            try {
-              await access(absolute)
-              if (!found.includes(absolute)) found.push(absolute)
-            } catch {
-              /* 这个基准下没有，继续试下一个 */
-            }
-            if (found.length >= 3) break
-          }
-          if (found.length >= 3) break
-        }
+        const found = await resolveRelativePath(relative)
         if (found.length === 0) {
           throw new Error(`按相对路径找不到文件：${relative}`)
         }

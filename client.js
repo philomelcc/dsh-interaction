@@ -3021,7 +3021,7 @@ window.__ModuleLoader__.load({
      * React 重渲染会把 span 冲掉，所以 DOM 一变就重扫重包（防抖，已包的跳过）。
      * 路径是否存在由 Host 侧的 openWorkspacePath 校验，点不存在的路径只会静默失败。
      */
-    function installPathActions() {
+    function installPathActions(ctx) {
       var cleanups = [];
       var menuEl = null;
       var scanTimer = null;
@@ -3100,6 +3100,124 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * 当前会话（主视图正在显示的那个）：sidebar 预览只认 session 地址，必须知道 sessionId。
+       * UiSession 用 `retainInfo(id).retainedBy.mainView > 0` 判断主视图保留的会话，照抄这个判据。
+       */
+      function currentSessionInfo() {
+        var sessions = null;
+        try {
+          sessions = ctx.get("sessions");
+        } catch (error) {
+          sessions = null;
+        }
+        if (!sessions || !sessions.list || typeof sessions.retainInfo !== "function") return null;
+        var byId = null;
+        try {
+          byId = sessions.list.getSnapshot().byId || null;
+        } catch (error) {
+          byId = null;
+        }
+        if (!byId) return null;
+        var ids = Object.keys(byId);
+        for (var index = 0; index < ids.length; index += 1) {
+          var id = ids[index];
+          var retained = 0;
+          try {
+            retained = sessions.retainInfo(id).getSnapshot().retainedBy.mainView || 0;
+          } catch (error) {
+            retained = 0;
+          }
+          if (retained > 0) {
+            return { sessionId: id, cwd: byId[id] && byId[id].cwd };
+          }
+        }
+        return null;
+      }
+
+      /** 拼 `dsh-resource://file/session/<sessionId>/<相对路径>`（和 DSH 的 fileAddressFor 一致）。 */
+      function sessionFileAddress(sessionId, cwd, absolutePath) {
+        var normalized = String(absolutePath || "").replace(/\\/g, "/");
+        var root = String(cwd || "").replace(/\\/g, "/").replace(/\/+$/, "");
+        var relative = normalized;
+        if (root !== "" && normalized.indexOf(root + "/") === 0) {
+          relative = normalized.slice(root.length + 1);
+        }
+        var encoded = relative
+          .split("/")
+          .map(function (segment) {
+            return encodeURIComponent(segment).replace(/%3A/gi, ":");
+          })
+          .join("/");
+        return "dsh-resource://file/session/" + encodeURIComponent(sessionId) + "/" + encoded;
+      }
+
+      /** 用 DSH 自带的右侧边栏预览打开；没有预览服务时返回 false 让调用方回退。 */
+      function openInSidebar(absolutePath) {
+        var sidebar = null;
+        try {
+          sidebar = ctx.sidebarRight;
+        } catch (error) {
+          sidebar = null;
+        }
+        if (!sidebar) {
+          try {
+            sidebar = ctx.get("sidebarRight");
+          } catch (error) {
+            sidebar = null;
+          }
+        }
+        if (!sidebar || typeof sidebar.openResource !== "function") return false;
+        var info = currentSessionInfo();
+        if (!info) return false;
+        try {
+          sidebar.openResource(sessionFileAddress(info.sessionId, info.cwd, absolutePath));
+          return true;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      /**
+       * 左键 / 菜单动作统一入口：先让 Host 解析成绝对路径并判断类型，再决定怎么打开。
+       *
+       * - auto：目录 → 系统打开；文件 → 侧边栏预览（预览不了再回退系统打开）
+       * - preview：强制走侧边栏预览
+       * - system：强制用系统默认程序打开
+       * - reveal：在文件管理器里定位
+       */
+      function activatePath(path, action) {
+        fetch(API + "/resolve", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: path }),
+        })
+          .then(function (response) {
+            return response.json();
+          })
+          .then(function (result) {
+            if (!result || result.ok !== true) return;
+            var absolute = result.absolute;
+            if (!absolute) return;
+            if (action === "reveal") {
+              callHost(absolute, "reveal");
+              return;
+            }
+            if (action === "system") {
+              callHost(absolute, "open");
+              return;
+            }
+            if (action === "auto" && result.isDirectory === true) {
+              callHost(absolute, "open");
+              return;
+            }
+            if (!openInSidebar(absolute)) callHost(absolute, "open");
+          })
+          .catch(function () {
+            /* 解析不到就静默，不打断阅读 */
+          });
+      }
+
       function callHost(path, action) {
         fetch(API + (action === "reveal" ? "/reveal" : "/open"), {
           method: "POST",
@@ -3125,22 +3243,6 @@ window.__ModuleLoader__.load({
         return href;
       }
 
-      /** 是不是盘符 / UNC 绝对路径。 */
-      function isAbsolutePath(path) {
-        return /^[A-Za-z]:[\\/]/.test(path) || path.slice(0, 2) === "\\\\";
-      }
-
-      /** 相对路径交给 Host 解析（按会话 cwd 探测 + 存在性检查），解析不到就静默。 */
-      function callHostRelative(path, action) {
-        fetch(API + "/open-relative", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: path, action: action === "reveal" ? "reveal" : undefined }),
-        }).catch(function () {
-          /* 找不到对应文件时保持安静 */
-        });
-      }
-
       function closeMenu() {
         if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl);
         menuEl = null;
@@ -3155,8 +3257,9 @@ window.__ModuleLoader__.load({
           "border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);" +
           "box-shadow:0 10px 28px color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);";
         var items = [
+          ["在侧边栏预览", "preview"],
+          ["用系统默认程序打开", "system"],
           ["打开所在目录", "reveal"],
-          ["打开文件", "open"],
           ["复制路径", "copy"],
         ];
         items.forEach(function (item) {
@@ -3181,8 +3284,7 @@ window.__ModuleLoader__.load({
               if (navigator.clipboard) navigator.clipboard.writeText(path).catch(function () {});
               return;
             }
-            if (isAbsolutePath(path)) callHost(path, item[1]);
-            else callHostRelative(path, item[1]);
+            activatePath(path, item[1]);
           });
           menu.appendChild(row);
         });
@@ -3215,8 +3317,7 @@ window.__ModuleLoader__.load({
         if (path) {
           event.preventDefault();
           event.stopPropagation();
-          if (isAbsolutePath(path)) callHost(path, "open");
-          else callHostRelative(path, "open");
+          activatePath(path, "auto");
           return;
         }
         // 2) markdown 链接指向的相对路径：交给 Host 按各会话 cwd 探测，文件真存在才打开。
@@ -3228,7 +3329,7 @@ window.__ModuleLoader__.load({
         if (!relative) return;
         event.preventDefault();
         event.stopPropagation();
-        callHostRelative(relative);
+        activatePath(relative, "auto");
       }, true);
 
       // 右键路径：我们的菜单替换系统菜单（路径上才有）。
@@ -3338,7 +3439,7 @@ window.__ModuleLoader__.load({
       function syncPathLinksNow() {
         try {
           if (pathLinksOn && !pathActionsDispose) {
-            pathActionsDispose = installPathActions();
+            pathActionsDispose = installPathActions(ctx);
           } else if (!pathLinksOn && pathActionsDispose) {
             pathActionsDispose();
             pathActionsDispose = null;
@@ -3417,7 +3518,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ["slots", "locale"],
+      inject: ["slots", "locale", "sidebarRight", "sessions"],
       apply: apply,
       __internal: {
         AUDIO_BODY_ID: AUDIO_BODY_ID,
