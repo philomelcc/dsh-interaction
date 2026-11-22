@@ -3007,6 +3007,9 @@ window.__ModuleLoader__.load({
       ".di-path{background:var(--dsw-alias-markdown-inline-code);border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 12%,transparent);border-radius:8px;padding:0 5px;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);text-underline-offset:2px;cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease,text-decoration-color .15s ease}",
       // 悬停：底色往品牌色偏、边框和文字一起变品牌色。
       ".di-path:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-markdown-inline-code));border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent);color:var(--dsw-alias-brand-primary);text-decoration-color:var(--dsw-alias-brand-primary)}",
+      // 行内代码里的路径：沿用 code 自己的底和内边距，只加下划线，别叠两层背景。
+      "code .di-path{background:transparent;border:0;padding:0}",
+      "code .di-path:hover{background:transparent;color:var(--dsw-alias-brand-primary)}",
     ].join("");
 
     /**
@@ -3058,6 +3061,34 @@ window.__ModuleLoader__.load({
         var node;
         while ((node = walker.nextNode())) nodes.push(node);
         for (var index = 0; index < nodes.length; index += 1) wrapOne(nodes[index]);
+        wrapInlineCodePaths();
+      }
+
+      /**
+       * 行内代码里「整段就是一个路径」时也包成 chip。
+       *
+       * AI 很爱用反引号包路径（`` `C:\...` ``），但 `code` 在整个扫描里被跳过了，
+       * 导致这种最常见的写法反而不响应点击。这里只处理「整段内容就是路径」的 code，
+       * 命令里的路径（`cd C:\foo`）不动。
+       */
+      function wrapInlineCodePaths() {
+        var codes = document.querySelectorAll("code");
+        for (var index = 0; index < codes.length; index += 1) {
+          var code = codes[index];
+          if (code.closest("pre")) continue;
+          if (code.querySelector(".di-path")) continue;
+          var text = (code.textContent || "").trim();
+          if (!text) continue;
+          PATH_RE.lastIndex = 0;
+          var match = PATH_RE.exec(text);
+          if (!match || match[0].length !== text.length) continue;
+          var span = document.createElement("span");
+          span.className = "di-path";
+          span.setAttribute("data-path", match[0]);
+          span.textContent = match[0];
+          code.textContent = "";
+          code.appendChild(span);
+        }
       }
 
       /** 单个文本节点里的所有路径：从后往前切，前面的字符索引不受影响。 */
